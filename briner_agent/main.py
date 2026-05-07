@@ -4,7 +4,9 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import yaml
@@ -163,28 +165,57 @@ def build_arg_parser():
     return parser
 
 
-def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, poll_interval: int, once: bool):
+def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, poll_interval: int, once: bool, stop_event=None, force_scan_event=None, tray=None):
     logger.info("Modo interval: ejecutando escaneo inicial inmediato.")
+    processed_total = 0
+    errors_total = 0
     while True:
+        if stop_event and stop_event.is_set():
+            break
+        if tray:
+            tray.update_stats(status="Procesando...", pending=0, processed_total=processed_total, errors_total=errors_total, processing=True)
         try:
             detected = scan_directory_once(workspace_dir, db_manager, config)
             result = orchestrator.process_pending_files()
+            processed_total += result.get("processed", 0)
+            errors_total += result.get("errors", 0)
+            last_cycle = datetime.now().strftime("%H:%M:%S")
             logger.info(
                 "Ciclo interval terminado. detectados=%s procesados=%s errores=%s",
                 detected,
                 result.get("processed", 0),
                 result.get("errors", 0),
             )
+            if tray:
+                tray.update_stats(
+                    status="Corriendo",
+                    pending=result.get("pending", 0),
+                    processed_total=processed_total,
+                    errors_total=errors_total,
+                    last_cycle=last_cycle,
+                )
         except Exception as exc:
             logger.exception("Error inesperado en ciclo interval; el servicio continuara: %s", exc)
+            if tray:
+                tray.update_stats(status="Error en ciclo", processed_total=processed_total, errors_total=errors_total, error=True)
 
         if once:
             return
         logger.info("Modo interval: esperando %s segundo(s) para el siguiente escaneo.", poll_interval)
-        time.sleep(poll_interval)
+        if tray:
+            tray.update_stats(status="Esperando...", pending=0, processed_total=processed_total, errors_total=errors_total)
+        deadline = time.monotonic() + poll_interval
+        while time.monotonic() < deadline:
+            if stop_event and (stop_event.is_set() or force_scan_event.is_set()):
+                break
+            time.sleep(1)
+        if force_scan_event:
+            force_scan_event.clear()
+        if stop_event and stop_event.is_set():
+            break
 
 
-def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, once: bool):
+def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, once: bool, stop_event=None, tray=None):
     from modules.file_watcher import DirectoryMonitor
 
     monitor = DirectoryMonitor(watch_directory=str(workspace_dir), db_manager=db_manager, config=config)
@@ -195,19 +226,40 @@ def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: di
         orchestrator.process_pending_files()
         return
 
+    processed_total = 0
+    errors_total = 0
     monitor.start()
+    if tray:
+        tray.update_stats(status="Corriendo (tiempo real)", processed_total=0, errors_total=0)
     try:
-        while True:
+        while not (stop_event and stop_event.is_set()):
             try:
                 result = orchestrator.process_pending_files()
-                logger.info(
-                    "Ciclo realtime terminado. procesados=%s errores=%s",
-                    result.get("processed", 0),
-                    result.get("errors", 0),
-                )
+                processed_total += result.get("processed", 0)
+                errors_total += result.get("errors", 0)
+                if result.get("processed", 0) > 0:
+                    last_cycle = datetime.now().strftime("%H:%M:%S")
+                    logger.info(
+                        "Ciclo realtime terminado. procesados=%s errores=%s",
+                        result.get("processed", 0),
+                        result.get("errors", 0),
+                    )
+                    if tray:
+                        tray.update_stats(
+                            status="Corriendo (tiempo real)",
+                            pending=result.get("pending", 0),
+                            processed_total=processed_total,
+                            errors_total=errors_total,
+                            last_cycle=last_cycle,
+                        )
             except Exception as exc:
                 logger.exception("Error inesperado en ciclo realtime; el servicio continuara: %s", exc)
-            time.sleep(3)
+                if tray:
+                    tray.update_stats(status="Error en ciclo", processed_total=processed_total, errors_total=errors_total, error=True)
+            if stop_event:
+                stop_event.wait(timeout=3)
+            else:
+                time.sleep(3)
     finally:
         monitor.stop()
 
@@ -304,13 +356,33 @@ def main():
 
     orchestrator = BrinerOrchestrator(config=config, db_manager=db_manager)
 
+    stop_event = threading.Event()
+    force_scan_event = threading.Event()
+    tray = None
+    if not args.once:
+        try:
+            from modules.tray_icon import BrinerTrayIcon
+            tray = BrinerTrayIcon(
+                workspace_dir=workspace_dir,
+                appdata_dir=APPDATA_DIR,
+                stop_event=stop_event,
+                force_scan_event=force_scan_event,
+            )
+            tray.start()
+        except Exception as exc:
+            logger.warning("No se pudo iniciar el icono de bandeja del sistema: %s", exc)
+            tray = None
+
     try:
         if mode == "realtime":
-            _run_realtime_loop(orchestrator, db_manager, workspace_dir, config, args.once)
+            _run_realtime_loop(orchestrator, db_manager, workspace_dir, config, args.once, stop_event=stop_event, tray=tray)
         else:
-            _run_interval_loop(orchestrator, db_manager, workspace_dir, config, poll_interval, args.once)
+            _run_interval_loop(orchestrator, db_manager, workspace_dir, config, poll_interval, args.once, stop_event=stop_event, force_scan_event=force_scan_event, tray=tray)
     except KeyboardInterrupt:
         logger.info("Briner se ha detenido correctamente por orden del usuario.")
+    finally:
+        if tray:
+            tray.stop()
 
 
 if __name__ == "__main__":
