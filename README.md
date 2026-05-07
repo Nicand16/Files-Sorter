@@ -1,6 +1,6 @@
 # Briner - Organizador automático de archivos
 
-Briner organiza automáticamente los archivos de una carpeta (por ejemplo, `Descargas`) cada hora, moviéndolos a subcarpetas según su tipo. Se ejecuta en segundo plano al iniciar Windows.
+Briner organiza automáticamente los archivos de una carpeta (por ejemplo, `Descargas`) moviéndolos a subcarpetas según su tipo. Se ejecuta en segundo plano al iniciar Windows y muestra su actividad desde el ícono de la bandeja del sistema.
 
 ## Uso para usuarios finales
 
@@ -11,6 +11,21 @@ Briner organiza automáticamente los archivos de una carpeta (por ejemplo, `Desc
 5. ¡Listo! Briner se ejecutará automáticamente cada vez que inicies Windows.
 
 No se requiere instalar Python ni ninguna dependencia adicional.
+
+## Bandeja del sistema
+
+El ícono de Briner en la barra de tareas indica su estado con colores:
+
+| Color | Significado |
+|---|---|
+| Verde | Corriendo normalmente |
+| Azul | Procesando archivos |
+| Rojo | Error activo |
+
+El menú del ícono muestra:
+- Estado general y contadores (pendientes, procesados, errores)
+- **Últimas 5 acciones por archivo en tiempo real** (`[>]` movido, `[!]` error, `[*]` procesando, `[-]` ignorado)
+- Acciones: Forzar escaneo, Ver logs, Abrir carpeta monitoreada, Detener
 
 ## Carpetas de destino
 
@@ -54,7 +69,7 @@ cd briner_agent\dist\Briner
 # Simular sin mover archivos
 .\Briner.exe --once --dry-run
 
-# Ver métricas
+# Ver métricas (incluye latencia de arranque, LLM, caché y por fase)
 .\Briner.exe --metrics
 
 # Reconfigurar carpeta y API key (o vuelve a ejecutar Install.bat)
@@ -79,31 +94,111 @@ Vuelve a ejecutar `Install.bat` o edita:
 %APPDATA%\Briner\user_settings.json
 ```
 
+---
+
 ## Para desarrolladores
 
-### Estructura del proyecto
+### Arquitectura
+
+Briner usa dos ejecutables que comparten el directorio `%APPDATA%\Briner`:
+
+- **`Briner.exe`** — con consola; para setup inicial y comandos manuales (`--once`, `--dry-run`, `--metrics`, `--setup`).
+- **`BrinerBackground.exe`** — sin consola; el servicio en segundo plano que arranca con Windows.
+
+#### Pipeline de clasificación
+
+```
+Archivo detectado (watcher / scanner)
+         │
+    [EventBus: DETECTED]
+         │
+┌────────────────────┐
+│  Fase 1: Reglas    │  ← sin API, instantáneo
+│  (extensión /      │
+│   palabra clave)   │
+└────────┬───────────┘
+         │ ¿ambiguo?
+   Sí ───┘   No → MOVED / IGNORED
+   │
+┌──┴───────────────────────────┐
+│  Caché de decisiones          │  ← LRU + TTL por (extensión, patrón)
+│  (mismo patrón = sin LLM)    │
+└──┬───────────────────────────┘
+   │ miss → Fase 2
+   │ hit  → MOVED (sin llamada a API)
+   │
+┌──┴───────────────────────────┐
+│  Fase 2: LLM por lote        │  ← 1 llamada para N archivos
+│  (CircuitBreaker protege)    │
+└──┬───────────────────────────┘
+   │ falla → Fase 3
+   │
+┌──┴───────────────────────────┐
+│  Fase 3: Agente ReAct        │  ← por archivo, último recurso
+└──────────────────────────────┘
+```
+
+#### Secuencia de arranque (objetivo: bandeja visible en < 2 s)
+
+```
+main() arranca → carga config + settings (sin llamadas a API)
+      ↓
+Bandeja del sistema aparece (ícono verde)
+      ↓
+DatabaseManager inicializa SQLite
+      ↓
+BrinerOrchestrator listo (LLM no inicializado todavía)
+      ↓
+Ciclo de procesamiento inicia → LLM se inicializa al primer archivo ambiguo
+```
+
+#### Estados del Circuit Breaker
+
+```
+CLOSED → (N fallos consecutivos) → OPEN → (recovery_seconds) → HALF_OPEN
+                                                                    │
+                                              éxito del probe → CLOSED
+                                              fallo del probe → OPEN
+```
+
+Cuando el circuit está `OPEN`, las llamadas a Gemini se saltan y los archivos van a `7. Varios` sin esperar.
+
+### Módulos principales
 
 ```
 Files Sorter/
-  Install.bat                    ← instalador para usuarios finales
+  Install.bat                         ← instalador para usuarios finales
   briner_agent/
-    main.py                      ← punto de entrada
-    config.yaml                  ← taxonomía y configuración base
+    main.py                           ← punto de entrada y loops principal/intervalo
+    config.yaml                       ← taxonomía y configuración base
     core/
-      settings_manager.py        ← manejo de configuración de usuario
-      agent_orchestrator.py      ← orquestador principal
-      llm_engine.py              ← motor Gemini (opcional)
+      agent_orchestrator.py           ← pipeline 3 fases + circuit breaker + caché
+      llm_engine.py                   ← inicialización de Gemini (lazy)
+      settings_manager.py             ← configuración de usuario
     modules/
-      periodic_scanner.py        ← escaneo por intervalo
-      rules_engine.py            ← clasificación por reglas
-      crud_executor.py           ← movimiento de archivos
+      file_watcher.py                 ← monitoreo en tiempo real (watchdog)
+      periodic_scanner.py             ← escaneo por intervalo
+      rules_engine.py                 ← clasificación determinista
+      crud_executor.py                ← movimiento seguro de archivos
+      tray_icon.py                    ← ícono de bandeja (pystray) + feed en vivo
+      multimodal_parser.py            ← extracción de contenido PDF/DOCX/XLSX
+      history.py                      ← deshacer último movimiento
+    runtime/
+      event_bus.py                    ← pub/sub de eventos por archivo (7 estados)
+      circuit_breaker.py              ← CLOSED/OPEN/HALF_OPEN para proteger LLM
+    classifiers/
+      decision_cache.py               ← caché LRU+TTL de decisiones LLM
+    infra/
+      metrics.py                      ← timers y contadores en proceso (sin deps externas)
     db/
-      database_manager.py        ← SQLite
+      database_manager.py             ← SQLite (archivos, acciones, eventos de clasificación)
       schema.sql
-    dist/
-      Briner/                    ← exe con consola (setup/debug)
-      BrinerBackground/          ← exe sin consola (servicio en fondo)
-    build_all.bat                ← reconstruir ambos exes
+    tests/
+      test_core.py                    ← reglas, movimientos, DB, configuración
+      test_event_bus.py               ← pub/sub, estados, short_label
+      test_circuit_breaker.py         ← transiciones CLOSED/OPEN/HALF_OPEN
+      test_decision_cache.py          ← LRU, TTL, normalización de dígitos
+    build_all.bat                     ← reconstruir ambos exes
 ```
 
 ### Instalar dependencias
@@ -118,8 +213,17 @@ pip install -r requirements.txt
 ### Ejecutar desde código fuente
 
 ```powershell
+# Primera vez (configura carpeta y API key)
 python briner_agent\main.py --setup
+
+# Modo continuo
 python briner_agent\main.py
+
+# Una sola pasada en seco
+python briner_agent\main.py --once --dry-run
+
+# Ver métricas de rendimiento
+python briner_agent\main.py --metrics
 ```
 
 ### Reconstruir los ejecutables
@@ -141,4 +245,18 @@ python -m PyInstaller --clean --noconfirm BrinerBackground.spec
 ```powershell
 cd briner_agent
 python -m pytest -q
+# 41 tests; 1 fallo esperado en Windows (test de expanduser con home mock)
 ```
+
+### Configuración avanzada (`config.yaml`)
+
+Parámetros relevantes bajo `processing:`:
+
+| Clave | Por defecto | Descripción |
+|---|---|---|
+| `llm_batch_size` | `50` | Archivos por llamada LLM |
+| `llm_timeout_seconds` | `60` | Timeout por invocación |
+| `circuit_breaker_threshold` | `3` | Fallos antes de abrir el circuit |
+| `circuit_breaker_recovery_seconds` | `60` | Tiempo hasta probe de recuperación |
+| `decision_cache_size` | `200` | Entradas máximas en caché |
+| `decision_cache_ttl_seconds` | `3600` | Tiempo de vida de cada entrada |
