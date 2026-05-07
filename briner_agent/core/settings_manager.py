@@ -76,35 +76,28 @@ def save_user_settings(settings_path: str | Path, settings: dict) -> bool:
 
 
 def prompt_for_initial_settings(settings_path: str | Path) -> dict:
-    print("Configuracion inicial de Briner")
+    print("\n=== Briner - Configuracion inicial ===\n")
+    print("Briner organizara automaticamente los archivos de la carpeta que elijas.")
+    print("El escaneo se realizara cada hora. Solo necesitas indicar la carpeta.\n")
     while True:
         folder = input("Carpeta a organizar (ej. C:\\Users\\tu_usuario\\Downloads): ").strip().strip('"')
         try:
             workspace_dir = validate_watch_directory(folder)
             break
         except ValueError as exc:
-            print(exc)
-
-    while True:
-        raw_interval = input("Intervalo de escaneo en segundos (minimo 10, recomendado 3600): ").strip() or "3600"
-        try:
-            poll_interval = validate_poll_interval(raw_interval)
-            break
-        except ValueError as exc:
-            print(exc)
-
-    raw_dry_run = input("Activar dry_run? No mueve archivos, solo simula. [s/N]: ").strip().casefold()
-    dry_run = raw_dry_run in {"s", "si", "y", "yes", "true", "1"}
+            print(f"  Error: {exc}")
+            print("  Asegurate de que la carpeta existe e ingresa la ruta completa.\n")
 
     settings = {
         "monitoring": {
             "mode": "interval",
             "workspace_dir": workspace_dir,
-            "poll_interval": poll_interval,
-            "dry_run": dry_run,
+            "poll_interval": 3600,
+            "dry_run": False,
         }
     }
     save_user_settings(settings_path, settings)
+    print(f"\n  Carpeta configurada: {workspace_dir}")
     return settings
 
 

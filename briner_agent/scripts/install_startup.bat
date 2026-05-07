@@ -2,7 +2,7 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-set "DEFAULT_EXE=%SCRIPT_DIR%..\dist\Briner\Briner.exe"
+set "DEFAULT_EXE=%SCRIPT_DIR%..\dist\BrinerBackground\BrinerBackground.exe"
 
 if "%~1"=="" (
     set "BRINER_EXE=%DEFAULT_EXE%"
@@ -13,11 +13,11 @@ if "%~1"=="" (
 for %%I in ("%BRINER_EXE%") do set "BRINER_EXE=%%~fI"
 
 if not exist "%BRINER_EXE%" (
-    echo No se encontro Briner.exe en:
+    echo No se encontro el ejecutable en:
     echo   %BRINER_EXE%
     echo.
-    echo Genera primero el exe con PyInstaller o pasa la ruta como argumento:
-    echo   install_startup.bat "C:\ruta\a\Briner.exe"
+    echo Genera primero los ejecutables con build_all.bat o pasa la ruta como argumento:
+    echo   install_startup.bat "C:\ruta\a\BrinerBackground.exe"
     exit /b 1
 )
 
@@ -28,7 +28,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$link=$shell.CreateShortcut($shortcut);" ^
   "$link.TargetPath='%BRINER_EXE%';" ^
   "$link.WorkingDirectory=Split-Path '%BRINER_EXE%';" ^
-  "$link.Arguments='';" ^
+  "$link.Arguments='--no-wizard';" ^
+  "$link.WindowStyle=7;" ^
   "$link.Save();" ^
   "Write-Host 'Acceso directo creado en:' $shortcut"
 
@@ -37,5 +38,5 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Briner se ejecutara al iniciar sesion del usuario actual.
+echo Briner (segundo plano) se ejecutara al iniciar sesion del usuario actual.
 exit /b 0

@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -9,8 +10,11 @@ from pathlib import Path
 import yaml
 
 CODE_DIR = Path(__file__).resolve().parent
-APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else CODE_DIR
+IS_FROZEN = getattr(sys, "frozen", False)
+APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else CODE_DIR
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", CODE_DIR)).resolve()
+# State files (settings, db, logs) go to APPDATA when frozen so both exes share them.
+APPDATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Briner" if IS_FROZEN else CODE_DIR
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
@@ -23,7 +27,7 @@ try:
 except ImportError:
     load_dotenv = None
 
-LOG_DIR = APP_DIR / "logs"
+LOG_DIR = APPDATA_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(
@@ -39,37 +43,40 @@ logger = logging.getLogger("BrinerMain")
 
 def load_environment():
     env_logger = logging.getLogger("BrinerMain")
-    env_path = APP_DIR / ".env"
+    # When frozen, check APPDATA first (shared between Briner and BrinerBackground), then next to the exe.
+    env_paths = [APPDATA_DIR / ".env", APP_DIR / ".env"] if IS_FROZEN else [APP_DIR / ".env"]
+
     if load_dotenv:
-        load_dotenv(env_path, override=True)
+        for ep in env_paths:
+            load_dotenv(ep, override=False)
         load_dotenv()
 
     if os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
-        if env_path.exists():
-            env_logger.info("Credenciales IA cargadas desde .env junto a Briner.exe.")
-        return
-    if not env_path.exists():
+        env_logger.info("Credenciales IA cargadas.")
         return
 
-    try:
-        for line in env_path.read_text(encoding="utf-8-sig").splitlines():
-            value = line.strip()
-            if not value or value.startswith("#"):
-                continue
-            if "=" in value:
-                key, raw_value = value.split("=", 1)
-                key = key.strip()
-                raw_value = raw_value.strip().strip('"').strip("'")
-                if key in {"GOOGLE_API_KEY", "GEMINI_API_KEY"} and raw_value:
-                    os.environ[key] = raw_value
-                    env_logger.info("Credenciales IA cargadas manualmente desde .env.")
-                    return
-                continue
-            os.environ["GOOGLE_API_KEY"] = value
-            env_logger.info("API key cargada desde .env en formato simple.")
-            return
-    except OSError as exc:
-        env_logger.warning("No se pudo leer .env: %s", exc)
+    for env_path in env_paths:
+        if not env_path.exists():
+            continue
+        try:
+            for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+                value = line.strip()
+                if not value or value.startswith("#"):
+                    continue
+                if "=" in value:
+                    key, raw_value = value.split("=", 1)
+                    key = key.strip()
+                    raw_value = raw_value.strip().strip('"').strip("'")
+                    if key in {"GOOGLE_API_KEY", "GEMINI_API_KEY"} and raw_value:
+                        os.environ[key] = raw_value
+                        env_logger.info("Credenciales IA cargadas manualmente desde .env en %s.", env_path.parent)
+                        return
+                    continue
+                os.environ["GOOGLE_API_KEY"] = value
+                env_logger.info("API key cargada desde .env en formato simple.")
+                return
+        except OSError as exc:
+            env_logger.warning("No se pudo leer .env en %s: %s", env_path, exc)
 
 
 load_environment()
@@ -94,6 +101,52 @@ def resolve_app_path(path_value: str | Path, base_dir: Path = APP_DIR) -> Path:
     if path.is_absolute():
         return path.resolve()
     return (base_dir / path).resolve()
+
+
+def _find_background_exe() -> Path | None:
+    """Localiza BrinerBackground.exe junto a Briner.exe cuando corre como ejecutable."""
+    if not IS_FROZEN:
+        return None
+    candidate = Path(sys.executable).parent.parent / "BrinerBackground" / "BrinerBackground.exe"
+    return candidate if candidate.exists() else None
+
+
+def _install_startup_shortcut() -> bool:
+    """Crea el acceso directo en la carpeta Startup de Windows para BrinerBackground.exe."""
+    bg_exe = _find_background_exe()
+    if not bg_exe:
+        logger.warning("BrinerBackground.exe no encontrado. Instala el inicio automatico manualmente.")
+        return False
+
+    bg_exe_str = str(bg_exe).replace("'", "''")
+    working_dir = str(bg_exe.parent).replace("'", "''")
+    ps_cmd = (
+        "$startup = [Environment]::GetFolderPath('Startup'); "
+        "$lnk = Join-Path $startup 'Briner.lnk'; "
+        "$shell = New-Object -ComObject WScript.Shell; "
+        "$link = $shell.CreateShortcut($lnk); "
+        f"$link.TargetPath = '{bg_exe_str}'; "
+        f"$link.WorkingDirectory = '{working_dir}'; "
+        "$link.Arguments = '--no-wizard'; "
+        "$link.WindowStyle = 7; "
+        "$link.Save(); "
+        "Write-Output 'SHORTCUT_OK'"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_cmd],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if "SHORTCUT_OK" in result.stdout:
+            logger.info("Acceso directo de inicio creado: %s", bg_exe)
+            return True
+        logger.warning("PowerShell no confirmo el acceso directo. stderr=%s", result.stderr.strip())
+        return False
+    except Exception as exc:
+        logger.error("Error al crear acceso directo de inicio: %s", exc)
+        return False
 
 
 def build_arg_parser():
@@ -165,15 +218,34 @@ def main():
     if not config_path.exists():
         config_path = RESOURCE_DIR / "config.yaml"
     config = normalize_monitoring_config(load_config(config_path))
-    settings_path = APP_DIR / "user_settings.json"
-    if args.setup and settings_path.exists():
+
+    # Settings path: shared via APPDATA when frozen so both exes see the same config.
+    settings_path = APPDATA_DIR / "user_settings.json"
+    settings_existed = settings_path.exists()
+    if args.setup and settings_existed:
         settings_path.unlink()
+        settings_existed = False
 
     config = load_or_create_user_settings(
         config,
         settings_path,
         prompt_if_missing=not args.no_wizard,
     )
+
+    # On first-time setup (frozen exe), auto-install Windows startup shortcut and exit.
+    if IS_FROZEN and not settings_existed and settings_path.exists():
+        logger.info("Primera configuracion detectada. Instalando inicio automatico...")
+        ok = _install_startup_shortcut()
+        if ok:
+            print("\n  Inicio automatico instalado. Briner se ejecutara al iniciar Windows.")
+        else:
+            print("\n  No se pudo instalar el inicio automatico.")
+            print("  Puedes hacerlo manualmente ejecutando:")
+            print("    briner_agent\\scripts\\install_startup.bat")
+        if args.setup:
+            print("\nConfiguracion completada. Puedes cerrar esta ventana.\n")
+            return
+
     if args.dry_run:
         config.setdefault("monitoring", {})["dry_run"] = True
     if args.no_scan:
@@ -181,7 +253,11 @@ def main():
 
     monitoring = config.get("monitoring", {})
     workspace_dir = resolve_app_path(monitoring.get("workspace_dir", "./workspace"))
-    db_path = resolve_app_path(config.get("database", {}).get("sqlite_path", "./db/briner.db"))
+    # DB path: APPDATA when frozen (shared), local db folder when running as script.
+    if IS_FROZEN:
+        db_path = APPDATA_DIR / "briner.db"
+    else:
+        db_path = resolve_app_path(config.get("database", {}).get("sqlite_path", "./db/briner.db"))
     monitoring["workspace_dir"] = str(workspace_dir)
     workspace_dir.mkdir(parents=True, exist_ok=True)
     poll_interval = monitoring.get("poll_interval", 120)

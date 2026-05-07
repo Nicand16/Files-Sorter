@@ -1,0 +1,74 @@
+﻿app:
+  name: "Briner"
+  version: "1.0.0"
+  description: "AI Autonomous Agent for File Management"
+
+monitoring:
+  mode: "interval"
+  workspace_dir: "./workspace"
+  poll_interval: 3600
+  dry_run: false
+  recursive: false
+  debounce_seconds: 2
+  ignore_existing_categories: true
+  ignored_filenames: [".keep", "desktop.ini"]
+  ignored_patterns: ["~$*", "*.tmp", "*.temp", "*.crdownload", "*.part"]
+  destination_aliases:
+    "Universidad y Estudio": "1. Universidad y Estudio"
+    "Software y Herramientas": "2. Software y Herramientas"
+    "Juegos y Emulacion": "3. Juegos y Emulacion"
+    "Multimedia": "4. Multimedia"
+    "Trabajo y Empleo": "5. Trabajo y Empleo"
+    "Documentos Personales": "6. Documentos Personales"
+    "Varios": "7. Varios"
+
+database:
+  sqlite_path: "./db/briner.db"
+
+llm:
+  model: "gemini-2.5-flash"
+  temperature: 0.2
+
+rules:
+  fallback_documents_to_varios: false
+
+processing:
+  max_workers: 2
+  max_files_per_cycle: 25
+  error_retry_seconds: 60
+
+parsing:
+  max_chars: 3000
+
+taxonomy:
+  categories:
+    - category: "Universidad y Estudio/Actividades y Tareas"
+      keywords: ["actividad", "taller", "protocolo", "ensayo", "tcc", "algebra", "calculo", "bd1", "ejercicio", "tarea", "produccion textual"]
+    - category: "Universidad y Estudio/Material de Estudio y Modulos"
+      keywords: ["modulo", "libro", "guia", "manual", "normas apa", "glosario", "latex", "tex"]
+    - category: "Universidad y Estudio/Tramites Academicos"
+      keywords: ["reglamento", "acuerdo", "recibo", "matricula", "diploma", "certificado_1002"]
+    - category: "Trabajo y Empleo/CVs y Portafolios"
+      keywords: ["cv", "resume", "hoja de vida", "curriculum"]
+    - category: "Trabajo y Empleo/Procesos de Seleccion"
+      keywords: ["interview", "oferta", "entrevista", "technical support", "simetrik", "openprovider", "js held", "contract", "prueba_tecnica", "ticket"]
+    - category: "Documentos Personales/Identificacion e Impuestos"
+      keywords: ["cedula", "rut", "identificacion", "passport", "visa"]
+    - category: "Documentos Personales/Finanzas y Salud"
+      keywords: ["certificado", "factura", "comprobante", "pago", "afiliacion", "eps", "receipt"]
+    - category: "Juegos y Emulacion/Torrents"
+      extensions: [".torrent"]
+    - category: "Juegos y Emulacion/ROMs e ISOs"
+      extensions: [".nsp", ".rvz", ".iso", ".srm", ".xci"]
+    - category: "Juegos y Emulacion/Emuladores y Mods"
+      keywords: ["yuzu", "cemu", "sudachi", "ryujinx", "retrobat", "mario", "zelda", "pokemon", "dolphin", "snes9x"]
+    - category: "Multimedia/Audio y Musica"
+      extensions: [".mp3", ".wav", ".flac", ".ogg"]
+    - category: "Multimedia/Videos y Grabaciones"
+      extensions: [".mp4", ".mkv", ".mov", ".avi"]
+    - category: "Multimedia/Imagenes y Capturas"
+      extensions: [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]
+    - category: "Software y Herramientas/Instaladores"
+      extensions: [".exe", ".msi"]
+    - category: "Software y Herramientas/Comprimidos y Portables"
+      extensions: [".zip", ".rar", ".7z"]
