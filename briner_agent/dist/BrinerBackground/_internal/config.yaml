@@ -8,7 +8,7 @@ monitoring:
   workspace_dir: "./workspace"
   poll_interval: 3600
   dry_run: false
-  recursive: false
+  recursive: true
   debounce_seconds: 2
   ignore_existing_categories: true
   ignored_filenames: [".keep", "desktop.ini"]
@@ -34,7 +34,7 @@ rules:
 
 processing:
   max_workers: 2
-  max_files_per_cycle: 25
+  max_files_per_cycle: 500
   llm_batch_size: 15
   error_retry_seconds: 60
 
