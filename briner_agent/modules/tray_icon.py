@@ -116,11 +116,14 @@ class BrinerTrayIcon:
     def _run(self):
         try:
             import pystray
-            img = _make_icon(self._GREEN)
+            with self._lock:
+                status = self._status
+                color = self._color
+            img = _make_icon(color)
             self._icon = pystray.Icon(
                 "Briner",
                 img,
-                "Briner — Iniciando...",
+                f"Briner — {status}",
                 menu=self._build_menu(),
             )
             self._icon.run()
