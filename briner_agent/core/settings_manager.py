@@ -139,6 +139,6 @@ def load_or_create_user_settings(
         else:
             try:
                 user_settings = prompt_for_initial_settings(settings_path)
-            except (EOFError, KeyboardInterrupt):
+            except (EOFError, KeyboardInterrupt, RuntimeError, OSError):
                 logger.warning("No se pudo mostrar el wizard interactivo. Usando defaults seguros.")
     return merge_settings(config, user_settings)
