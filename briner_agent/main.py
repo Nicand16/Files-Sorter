@@ -176,7 +176,14 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
             tray.update_stats(status="Procesando...", pending=0, processed_total=processed_total, errors_total=errors_total, processing=True)
         try:
             detected = scan_directory_once(workspace_dir, db_manager, config)
-            result = orchestrator.process_pending_files()
+            if tray:
+                result = orchestrator.process_pending_files(
+                    tray=tray,
+                    base_processed_total=processed_total,
+                    base_errors_total=errors_total,
+                )
+            else:
+                result = orchestrator.process_pending_files()
             processed_total += result.get("processed", 0)
             errors_total += result.get("errors", 0)
             last_cycle = datetime.now().strftime("%H:%M:%S")
@@ -197,7 +204,13 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
         except Exception as exc:
             logger.exception("Error inesperado en ciclo interval; el servicio continuara: %s", exc)
             if tray:
-                tray.update_stats(status="Error en ciclo", processed_total=processed_total, errors_total=errors_total, error=True)
+                tray.update_stats(
+                    status="Error en ciclo",
+                    processed_total=processed_total,
+                    errors_total=errors_total,
+                    error=True,
+                    error_message=str(exc),
+                )
 
         if once:
             return
@@ -234,7 +247,14 @@ def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: di
     try:
         while not (stop_event and stop_event.is_set()):
             try:
-                result = orchestrator.process_pending_files()
+                if tray:
+                    result = orchestrator.process_pending_files(
+                        tray=tray,
+                        base_processed_total=processed_total,
+                        base_errors_total=errors_total,
+                    )
+                else:
+                    result = orchestrator.process_pending_files()
                 processed_total += result.get("processed", 0)
                 errors_total += result.get("errors", 0)
                 if result.get("processed", 0) > 0:
@@ -255,13 +275,51 @@ def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: di
             except Exception as exc:
                 logger.exception("Error inesperado en ciclo realtime; el servicio continuara: %s", exc)
                 if tray:
-                    tray.update_stats(status="Error en ciclo", processed_total=processed_total, errors_total=errors_total, error=True)
+                    tray.update_stats(
+                        status="Error en ciclo",
+                        processed_total=processed_total,
+                        errors_total=errors_total,
+                        error=True,
+                        error_message=str(exc),
+                    )
             if stop_event:
                 stop_event.wait(timeout=3)
             else:
                 time.sleep(3)
     finally:
         monitor.stop()
+
+
+def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
+    errors = []
+
+    if not workspace_dir.exists():
+        errors.append(f"La carpeta monitoreada no existe: {workspace_dir}")
+    elif not workspace_dir.is_dir():
+        errors.append(f"La ruta monitoreada no es una carpeta: {workspace_dir}")
+
+    has_api_key = bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+    if not has_api_key:
+        errors.append("Falta GOOGLE_API_KEY/GEMINI_API_KEY en el entorno o .env.")
+    elif not orchestrator.llm:
+        errors.append("La API key existe, pero el motor LLM no pudo inicializarse.")
+    else:
+        try:
+            response = orchestrator._invoke_llm_with_timeout("Responde exactamente: OK", timeout_seconds=60)
+            logger.info("Verificacion LLM de arranque OK: %.80s", getattr(response, "content", ""))
+            orchestrator._record_api_success()
+        except Exception as exc:
+            errors.append(f"No hay conexion funcional con Gemini al arrancar: {exc}")
+
+    if errors:
+        message = " | ".join(errors)
+        logger.error("Verificacion de arranque fallida: %s", message)
+        if tray and hasattr(tray, "set_error"):
+            tray.set_error(message, notify=True)
+        return False
+
+    logger.info("Verificacion de arranque completada correctamente.")
+    return True
 
 
 def main():
@@ -321,7 +379,6 @@ def main():
     else:
         db_path = resolve_app_path(config.get("database", {}).get("sqlite_path", "./db/briner.db"))
     monitoring["workspace_dir"] = str(workspace_dir)
-    workspace_dir.mkdir(parents=True, exist_ok=True)
     poll_interval = monitoring.get("poll_interval", 120)
     mode = monitoring.get("mode", "interval")
     dry_run = monitoring.get("dry_run", False)
@@ -374,9 +431,12 @@ def main():
                 force_scan_event=force_scan_event,
             )
             tray.start()
+            orchestrator.set_tray(tray)
         except Exception as exc:
             logger.warning("No se pudo iniciar el icono de bandeja del sistema: %s", exc)
             tray = None
+
+    _run_startup_checks(workspace_dir, orchestrator, tray=tray)
 
     try:
         if mode == "realtime":

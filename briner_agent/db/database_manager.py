@@ -1,5 +1,6 @@
 ﻿import logging
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -13,8 +14,17 @@ class DatabaseManager:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_db()
 
+    @contextmanager
     def _get_connection(self):
-        return sqlite3.connect(str(self.db_path))
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _initialize_db(self):
         schema_path = Path(__file__).parent / "schema.sql"
@@ -28,12 +38,22 @@ class DatabaseManager:
         try:
             with self._get_connection() as conn:
                 conn.executescript(schema_script)
+                self._ensure_retry_count_column(conn)
             logger.info("Base de datos inicializada/verificada exitosamente en: %s", self.db_path.name)
         except sqlite3.Error as e:
             logger.error("Error al inicializar la base de datos: %s", e)
 
+    def _ensure_retry_count_column(self, conn):
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(files)").fetchall()
+        }
+        if "retry_count" not in columns:
+            conn.execute("ALTER TABLE files ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+            logger.info("Migracion aplicada: columna files.retry_count agregada.")
+
     def register_file(self, filename: str, filepath: str, extension: str, size_bytes: int, last_modified: float):
-        """Registra un archivo o actualiza su informacion y lo marca como pending."""
+        """Registra un archivo o actualiza su informacion sin revivir errores terminales."""
         query = """
         INSERT INTO files (filename, filepath, extension, size_bytes, last_modified)
         VALUES (?, ?, ?, ?, ?)
@@ -42,12 +62,32 @@ class DatabaseManager:
             extension=excluded.extension,
             size_bytes=excluded.size_bytes,
             last_modified=excluded.last_modified,
-            status='pending'
+            status=CASE
+                WHEN files.status = 'error' AND COALESCE(files.retry_count, 0) >= 3 THEN files.status
+                ELSE 'pending'
+            END,
+            retry_count=COALESCE(files.retry_count, 0)
         """
         try:
             with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                existing = conn.execute(
+                    "SELECT status, retry_count FROM files WHERE filepath = ?",
+                    (filepath,),
+                ).fetchone()
+                terminal_error = (
+                    existing is not None
+                    and existing["status"] == "error"
+                    and int(existing["retry_count"] or 0) >= 3
+                )
                 conn.execute(query, (filename, filepath, extension, size_bytes, last_modified))
-                return True
+                if terminal_error:
+                    logger.warning(
+                        "Archivo en error definitivo no se reencola (retry_count=%s): %s",
+                        existing["retry_count"],
+                        filepath,
+                    )
+                return not terminal_error
         except sqlite3.Error as e:
             logger.error("Error al registrar archivo %s: %s", filepath, e)
             return False
@@ -109,7 +149,18 @@ class DatabaseManager:
 
     def update_file_status(self, filepath: str, status: str):
         """Actualiza el estado de procesamiento del archivo."""
-        query = "UPDATE files SET status = ? WHERE filepath = ?"
+        if status == "error":
+            query = """
+            UPDATE files
+            SET status = ?, retry_count = COALESCE(retry_count, 0) + 1
+            WHERE filepath = ?
+            """
+        else:
+            query = """
+            UPDATE files
+            SET status = ?, retry_count = 0
+            WHERE filepath = ?
+            """
         try:
             with self._get_connection() as conn:
                 conn.execute(query, (status, filepath))
@@ -123,7 +174,7 @@ class DatabaseManager:
         new = Path(new_path)
         query = """
         UPDATE files
-        SET filename = ?, filepath = ?, extension = ?, status = ?
+        SET filename = ?, filepath = ?, extension = ?, status = ?, retry_count = 0
         WHERE filepath = ?
         """
         try:

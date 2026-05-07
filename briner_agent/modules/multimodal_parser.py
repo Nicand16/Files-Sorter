@@ -55,14 +55,17 @@ def _xml_text_from_zip(path: Path, members: list[str], max_chars: int) -> str:
 
 
 def _read_docx(path: Path, max_chars: int) -> str:
-    if importlib.util.find_spec("docx"):
+    try:
+        return _xml_text_from_zip(path, ["word/document.xml"], max_chars)
+    except Exception:
+        if not importlib.util.find_spec("docx"):
+            raise
+
         from docx import Document
 
         document = Document(str(path))
         text = " ".join(paragraph.text for paragraph in document.paragraphs)
         return _trim(text, max_chars)
-
-    return _xml_text_from_zip(path, ["word/document.xml"], max_chars)
 
 
 def _read_xlsx(path: Path, max_chars: int) -> str:

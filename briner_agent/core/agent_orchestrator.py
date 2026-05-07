@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from pathlib import Path
 
 try:
@@ -25,11 +25,15 @@ _BATCH_READABLE_EXTENSIONS = {
 _BATCH_CONTENT_MAX_CHARS = 300
 
 
-def _resolve_workspace(base_dir: Path, workspace_value: str | Path) -> Path:
+class MoveFailureError(RuntimeError):
+    def __init__(self, message: str, error_code: str | None = None):
+        super().__init__(message)
+        self.error_code = error_code
+
+
+def _resolve_workspace(workspace_value: str | Path) -> Path:
     path = Path(workspace_value).expanduser()
-    if path.is_absolute():
-        return path.resolve()
-    return (base_dir / path).resolve()
+    return path.resolve()
 
 
 class BrinerOrchestrator:
@@ -46,20 +50,74 @@ class BrinerOrchestrator:
         self.config = config
         self.db = db_manager
         if workspace_dir is not None:
-            self.workspace_root = Path(workspace_dir).resolve()
+            self.workspace_root = Path(workspace_dir).expanduser().resolve()
+            workspace_source = "main"
         else:
-            base_dir = Path(__file__).resolve().parents[1]
             workspace_rel_dir = config.get("monitoring", {}).get("workspace_dir", "./workspace")
-            self.workspace_root = _resolve_workspace(base_dir, workspace_rel_dir)
-        logger.info("Workspace root: %s (existe: %s)", self.workspace_root, self.workspace_root.exists())
+            self.workspace_root = _resolve_workspace(workspace_rel_dir)
+            workspace_source = "config"
+        self.config.setdefault("monitoring", {})["workspace_dir"] = str(self.workspace_root)
+        logger.info(
+            "Workspace root: %s (source=%s, existe=%s)",
+            self.workspace_root,
+            workspace_source,
+            self.workspace_root.exists(),
+        )
         self.dry_run = config.get("monitoring", {}).get("dry_run", config.get("app", {}).get("dry_run", False))
         self.destination_aliases = config.get("monitoring", {}).get("destination_aliases", {})
         self.max_files_per_cycle = max(1, int(config.get("processing", {}).get("max_files_per_cycle", 25)))
         self.llm_batch_size = max(1, int(config.get("processing", {}).get("llm_batch_size", 15)))
+        self.llm_timeout_seconds = int(config.get("processing", {}).get("llm_timeout_seconds", 60))
         self._active_paths: set[str] = set()
         self._active_paths_lock = threading.Lock()
+        self._tray = None
+        self._consecutive_api_failures = 0
         self.llm = get_llm(config)
         self.agent = self._initialize_agent()
+
+    def set_tray(self, tray):
+        self._tray = tray
+
+    def _notify_error(self, message: str, notify: bool = True):
+        logger.error(message)
+        if self._tray and hasattr(self._tray, "set_error"):
+            self._tray.set_error(message, notify=notify)
+
+    def _record_api_failure(self, message: str):
+        self._consecutive_api_failures += 1
+        logger.error(
+            "Fallo API LLM consecutivo %s: %s",
+            self._consecutive_api_failures,
+            message,
+        )
+        if self._consecutive_api_failures == 3:
+            self._notify_error(
+                f"Gemini fallo {self._consecutive_api_failures} veces seguidas. Ultimo error: {message}",
+                notify=True,
+            )
+
+    def _record_api_success(self):
+        self._consecutive_api_failures = 0
+
+    def _invoke_llm_with_timeout(self, prompt, timeout_seconds: int | None = None):
+        timeout = timeout_seconds or self.llm_timeout_seconds
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="BrinerLLMInvoke")
+        future = executor.submit(self.llm.invoke, prompt)
+        try:
+            return future.result(timeout=timeout)
+        except TimeoutError:
+            future.cancel()
+            message = f"Timeout de LLM despues de {timeout} segundos."
+            self._record_api_failure(message)
+            raise TimeoutError(message)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+
+    def _handle_move_failure(self, filepath: str, move_result: dict):
+        message = move_result.get("message", "Error desconocido al mover archivo.")
+        if move_result.get("error_code") == "workspace_mismatch":
+            self._notify_error(f"Workspace mismatch al mover '{Path(filepath).name}': {message}", notify=True)
+        raise MoveFailureError(message, move_result.get("error_code"))
 
     def _initialize_agent(self):
         if not create_react_agent:
@@ -124,7 +182,7 @@ REGLAS DE OPERACION:
             destination_aliases=self.destination_aliases,
         )
         if not move_result["ok"]:
-            raise RuntimeError(move_result["message"])
+            self._handle_move_failure(filepath, move_result)
 
         self.db.log_classification_event(
             filepath=filepath,
@@ -159,7 +217,7 @@ REGLAS DE OPERACION:
             destination_aliases=self.destination_aliases,
         )
         if not move_result["ok"]:
-            raise RuntimeError(move_result["message"])
+            self._handle_move_failure(filepath, move_result)
 
         self.db.log_classification_event(
             filepath=filepath,
@@ -220,7 +278,7 @@ REGLAS DE OPERACION:
         )
 
         try:
-            response = self.llm.invoke(prompt)
+            response = self._invoke_llm_with_timeout(prompt, timeout_seconds=60)
             text = response.content.strip()
             match = re.search(r"\[.*\]", text, re.DOTALL)
             if not match:
@@ -229,10 +287,15 @@ REGLAS DE OPERACION:
             results = json.loads(match.group())
             if not isinstance(results, list):
                 return None
+            self._record_api_success()
             logger.info("Batch LLM clasifico %d/%d archivos en una sola llamada.", len(results), len(files))
             return results
+        except TimeoutError as e:
+            logger.error("Timeout en clasificacion por lote: %s", e)
+            return None
         except Exception as e:
             logger.error("Error en clasificacion por lote: %s", e)
+            self._record_api_failure(str(e))
             return None
 
     # ------------------------------------------------------------------ #
@@ -255,8 +318,9 @@ REGLAS DE OPERACION:
             resultado = response["messages"][-1].content
             logger.info("[Respuesta de Briner para %s]:\n%s", filename, resultado)
             tool_moves = consume_thread_moves()
-            if tool_moves:
-                last_move = tool_moves[-1]
+            successful_moves = [move for move in tool_moves if move.get("ok")]
+            if successful_moves:
+                last_move = successful_moves[-1]
                 self.db.log_classification_event(
                     filepath=filepath,
                     decision_source="llm",
@@ -271,12 +335,21 @@ REGLAS DE OPERACION:
                 self.db.log_action(filepath, "llm_move", last_move["message"])
                 if not last_move.get("dry_run"):
                     self.db.update_file_path(filepath, last_move["new_path"], "processed")
+                self._record_api_success()
+            elif tool_moves:
+                self._handle_move_failure(filepath, tool_moves[-1])
             else:
                 self.db.update_file_status(filepath, "processed")
                 self.db.log_action(filepath, "llm_analysis", "Analisis preliminar completado.")
+                self._record_api_success()
             return "processed"
+        except MoveFailureError as e:
+            logger.error("Movimiento fallido en agente ReAct para %s: %s", filename, e)
+            self.db.update_file_status(filepath, "error")
+            return "error"
         except Exception as e:
             logger.error("Error en agente ReAct para %s: %s", filename, e)
+            self._record_api_failure(str(e))
             self.db.update_file_status(filepath, "error")
             return "error"
 
@@ -284,29 +357,80 @@ REGLAS DE OPERACION:
     # Procesamiento de archivos ambiguos (fases 2 + 3)                    #
     # ------------------------------------------------------------------ #
 
-    def _process_ambiguous_batch(self, files: list[dict], result: dict):
+    def _update_tray_progress(
+        self,
+        tray,
+        status: str,
+        result: dict,
+        base_processed_total: int,
+        base_errors_total: int,
+        pending: int = 0,
+    ):
+        if tray and hasattr(tray, "update_stats"):
+            tray.update_stats(
+                status=status,
+                pending=pending,
+                processed_total=base_processed_total + result.get("processed", 0),
+                errors_total=base_errors_total + result.get("errors", 0),
+                processing=True,
+            )
+
+    def _process_ambiguous_batch(
+        self,
+        files: list[dict],
+        result: dict,
+        tray=None,
+        base_processed_total: int = 0,
+        base_errors_total: int = 0,
+    ):
         """
         Intenta clasificar el chunk con una sola llamada LLM.
         Si falla, usa el agente ReAct por archivo como fallback.
         Libera los paths reclamados al terminar.
         """
         if self.llm:
+            self._update_tray_progress(
+                tray,
+                f"LLM: clasificando {len(files)} ambiguos",
+                result,
+                base_processed_total,
+                base_errors_total,
+                pending=len(files),
+            )
             classifications = self._classify_batch_with_llm(files)
             if classifications is not None:
                 by_path = {c["filepath"]: c.get("category", "Varios") for c in classifications if "filepath" in c}
+                successful = 0
                 for f in files:
                     filepath = f["filepath"]
                     category = by_path.get(filepath, "Varios")
                     try:
                         self._apply_move(filepath, category, "llm_batch", "Clasificacion en lote por LLM.")
                         result["processed"] += 1
+                        successful += 1
                     except Exception as e:
                         logger.error("Error aplicando movimiento de lote para %s: %s", f["filename"], e)
                         self.db.update_file_status(filepath, "error")
                         result["errors"] += 1
                     finally:
                         self._release_path(filepath)
+                self._update_tray_progress(
+                    tray,
+                    f"LLM: {successful}/{len(files)} clasificados",
+                    result,
+                    base_processed_total,
+                    base_errors_total,
+                    pending=0,
+                )
                 return
+            self._update_tray_progress(
+                tray,
+                f"LLM fallo; fallback para {len(files)} archivos",
+                result,
+                base_processed_total,
+                base_errors_total,
+                pending=len(files),
+            )
 
         # Fallback: archivo por archivo con ReAct (o Varios si no hay LLM)
         for f in files:
@@ -321,6 +445,10 @@ REGLAS DE OPERACION:
                 else:
                     self._apply_move(filepath, "Varios", "system", "Sin agente LLM disponible.")
                     result["processed"] += 1
+            except MoveFailureError as e:
+                logger.error("Movimiento fallido en fallback individual para %s: %s", f["filename"], e)
+                self.db.update_file_status(filepath, "error")
+                result["errors"] += 1
             except Exception as e:
                 logger.error("Error en fallback individual para %s: %s — moviendo a Varios.", f["filename"], e)
                 try:
@@ -332,6 +460,15 @@ REGLAS DE OPERACION:
                     result["errors"] += 1
             finally:
                 self._release_path(filepath)
+
+        self._update_tray_progress(
+            tray,
+            f"Fallback: {len(files)} archivos revisados",
+            result,
+            base_processed_total,
+            base_errors_total,
+            pending=0,
+        )
 
     # ------------------------------------------------------------------ #
     # Control de concurrencia                                              #
@@ -352,7 +489,7 @@ REGLAS DE OPERACION:
     # Punto de entrada del ciclo de procesamiento                          #
     # ------------------------------------------------------------------ #
 
-    def process_pending_files(self):
+    def process_pending_files(self, tray=None, base_processed_total: int = 0, base_errors_total: int = 0):
         """Consulta la BD por archivos pendientes y los procesa en 3 fases."""
         pending_files = self.db.get_pending_files(limit=self.max_files_per_cycle)
         result = {"pending": len(pending_files), "processed": 0, "errors": 0, "skipped": 0}
@@ -386,6 +523,15 @@ REGLAS DE OPERACION:
                 self._release_path(filepath)
                 result["errors"] += 1
 
+        self._update_tray_progress(
+            tray,
+            f"Reglas: {result['processed']} clasificados; {len(ambiguous)} ambiguos",
+            result,
+            base_processed_total,
+            base_errors_total,
+            pending=len(ambiguous),
+        )
+
         if not ambiguous:
             return result
 
@@ -398,6 +544,12 @@ REGLAS DE OPERACION:
         # Fases 2+3: lote LLM con fallback ReAct
         for i in range(0, len(ambiguous), self.llm_batch_size):
             chunk = ambiguous[i : i + self.llm_batch_size]
-            self._process_ambiguous_batch(chunk, result)
+            self._process_ambiguous_batch(
+                chunk,
+                result,
+                tray=tray,
+                base_processed_total=base_processed_total,
+                base_errors_total=base_errors_total,
+            )
 
         return result
