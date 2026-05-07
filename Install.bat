@@ -37,12 +37,25 @@ if not exist "%ROOT%briner_agent\dist\Briner\_internal\_socket.pyd" (
     exit /b 1
 )
 
-echo  Se abrira el asistente de configuracion...
-echo  Solo necesitaras indicar la carpeta que deseas organizar.
+echo  Selecciona la carpeta que deseas que Briner organice...
+echo  (Se abrira un dialogo de seleccion de carpeta)
 echo.
 
-:: Ejecutar el asistente de configuracion (se cierra solo al terminar)
-"%BRINER_EXE%" --setup
+for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Selecciona la carpeta que Briner organizara automaticamente'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { '' }"`) do set "WATCH_DIR=%%F"
+
+if "%WATCH_DIR%"=="" (
+    echo.
+    echo  No se selecciono ninguna carpeta. Instalacion cancelada.
+    echo.
+    pause
+    exit /b 1
+)
+
+echo  Carpeta seleccionada: %WATCH_DIR%
+echo.
+
+:: Guardar configuracion e instalar inicio automatico
+"%BRINER_EXE%" --setup --watch-dir "%WATCH_DIR%"
 
 if errorlevel 1 (
     echo.

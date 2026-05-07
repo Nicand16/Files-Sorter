@@ -74,6 +74,21 @@ def save_user_settings(settings_path: str | Path, settings: dict) -> bool:
         return False
 
 
+def create_settings_for_dir(folder: str, settings_path: str | Path) -> dict:
+    workspace_dir = validate_watch_directory(folder)
+    settings = {
+        "monitoring": {
+            "mode": "interval",
+            "workspace_dir": workspace_dir,
+            "poll_interval": 3600,
+            "dry_run": False,
+        }
+    }
+    save_user_settings(settings_path, settings)
+    print(f"\n  Carpeta configurada: {workspace_dir}")
+    return settings
+
+
 def prompt_for_initial_settings(settings_path: str | Path) -> dict:
     print("\n=== Briner - Configuracion inicial ===\n")
     print("Briner organizara automaticamente los archivos de la carpeta que elijas.")
@@ -115,11 +130,15 @@ def load_or_create_user_settings(
     config: dict,
     settings_path: str | Path,
     prompt_if_missing: bool = True,
+    default_dir: str | None = None,
 ) -> dict:
     user_settings = load_user_settings(settings_path)
     if not user_settings and prompt_if_missing:
-        try:
-            user_settings = prompt_for_initial_settings(settings_path)
-        except (EOFError, KeyboardInterrupt):
-            logger.warning("No se pudo mostrar el wizard interactivo. Usando defaults seguros.")
+        if default_dir:
+            user_settings = create_settings_for_dir(default_dir, settings_path)
+        else:
+            try:
+                user_settings = prompt_for_initial_settings(settings_path)
+            except (EOFError, KeyboardInterrupt):
+                logger.warning("No se pudo mostrar el wizard interactivo. Usando defaults seguros.")
     return merge_settings(config, user_settings)
