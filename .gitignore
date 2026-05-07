@@ -1,6 +1,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Los .pyd dentro del bundle compilado son modulos binarios necesarios, no bytecode
+!briner_agent/dist/**/*.pyd
 .venv/
 .env
 **/.env
