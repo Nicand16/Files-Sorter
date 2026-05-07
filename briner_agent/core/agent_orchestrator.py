@@ -2,6 +2,7 @@ import json
 import logging
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 try:
@@ -41,12 +42,16 @@ class BrinerOrchestrator:
       3. Fallback ReAct por archivo — solo si el lote falla.
     """
 
-    def __init__(self, config: dict, db_manager):
+    def __init__(self, config: dict, db_manager, workspace_dir=None):
         self.config = config
         self.db = db_manager
-        base_dir = Path(__file__).resolve().parents[1]
-        workspace_rel_dir = config.get("monitoring", {}).get("workspace_dir", "./workspace")
-        self.workspace_root = _resolve_workspace(base_dir, workspace_rel_dir)
+        if workspace_dir is not None:
+            self.workspace_root = Path(workspace_dir).resolve()
+        else:
+            base_dir = Path(__file__).resolve().parents[1]
+            workspace_rel_dir = config.get("monitoring", {}).get("workspace_dir", "./workspace")
+            self.workspace_root = _resolve_workspace(base_dir, workspace_rel_dir)
+        logger.info("Workspace root: %s (existe: %s)", self.workspace_root, self.workspace_root.exists())
         self.dry_run = config.get("monitoring", {}).get("dry_run", config.get("app", {}).get("dry_run", False))
         self.destination_aliases = config.get("monitoring", {}).get("destination_aliases", {})
         self.max_files_per_cycle = max(1, int(config.get("processing", {}).get("max_files_per_cycle", 25)))
@@ -96,6 +101,7 @@ REGLAS DE OPERACION:
         decision = classify_file(filename, extension, self.config)
         if not decision:
             return False
+        logger.info("Regla para '%s': accion=%s categoria=%s dry_run=%s", filename, decision.action, decision.category, self.dry_run)
 
         if decision.action == "ignore":
             self.db.log_classification_event(
@@ -188,8 +194,7 @@ REGLAS DE OPERACION:
         """
         from modules.multimodal_parser import extract_document_content
 
-        file_infos = []
-        for f in files:
+        def _extract_preview(f):
             info = {"filepath": f["filepath"], "filename": f["filename"]}
             ext = (f.get("extension") or "").lower()
             if ext in _BATCH_READABLE_EXTENSIONS and Path(f["filepath"]).exists():
@@ -197,7 +202,10 @@ REGLAS DE OPERACION:
                     info["content_preview"] = extract_document_content(f["filepath"], _BATCH_CONTENT_MAX_CHARS)
                 except Exception:
                     pass
-            file_infos.append(info)
+            return info
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            file_infos = list(pool.map(_extract_preview, files))
 
         taxonomy = build_taxonomy_prompt(self.config)
         files_json = json.dumps(file_infos, ensure_ascii=False, indent=2)
@@ -314,9 +322,14 @@ REGLAS DE OPERACION:
                     self._apply_move(filepath, "Varios", "system", "Sin agente LLM disponible.")
                     result["processed"] += 1
             except Exception as e:
-                logger.error("Error en fallback individual para %s: %s", f["filename"], e)
-                self.db.update_file_status(filepath, "error")
-                result["errors"] += 1
+                logger.error("Error en fallback individual para %s: %s — moviendo a Varios.", f["filename"], e)
+                try:
+                    self._apply_move(filepath, "Varios", "system", f"Error LLM: {e}")
+                    result["processed"] += 1
+                except Exception as e2:
+                    logger.error("Fallback a Varios tambien fallo para %s: %s", f["filename"], e2)
+                    self.db.update_file_status(filepath, "error")
+                    result["errors"] += 1
             finally:
                 self._release_path(filepath)
 
@@ -344,7 +357,9 @@ REGLAS DE OPERACION:
         pending_files = self.db.get_pending_files(limit=self.max_files_per_cycle)
         result = {"pending": len(pending_files), "processed": 0, "errors": 0, "skipped": 0}
 
+        logger.info("Pendientes en BD: %s (limite ciclo: %s)", len(pending_files), self.max_files_per_cycle)
         if not pending_files:
+            logger.info("Sin archivos pendientes. Esperando proximo ciclo.")
             return result
 
         logger.info("Orquestador detecto %s archivo(s) pendiente(s). Procesando...", len(pending_files))
