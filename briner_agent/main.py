@@ -159,6 +159,7 @@ def build_arg_parser():
     parser.add_argument("--setup", action="store_true", help="Fuerza el wizard de configuracion inicial.")
     parser.add_argument("--no-wizard", action="store_true", help="Usa config/defaults sin pedir settings iniciales.")
     parser.add_argument("--watch-dir", default=None, help="Carpeta a monitorear (omite el wizard interactivo).")
+    parser.add_argument("--api-key", default=None, help="API key de Google Gemini a guardar en APPDATA.")
     return parser
 
 
@@ -233,6 +234,13 @@ def main():
         prompt_if_missing=not args.no_wizard,
         default_dir=getattr(args, 'watch_dir', None),
     )
+
+    # Guardar API key en APPDATA si fue provista via --api-key
+    if args.api_key:
+        env_path = APPDATA_DIR / ".env"
+        env_path.write_text(f"GOOGLE_API_KEY={args.api_key}\n", encoding="utf-8")
+        os.environ["GOOGLE_API_KEY"] = args.api_key
+        logger.info("API key guardada en %s", env_path)
 
     # On first-time setup (frozen exe), auto-install Windows startup shortcut and exit.
     if IS_FROZEN and not settings_existed and settings_path.exists():

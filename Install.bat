@@ -91,9 +91,25 @@ echo.
 echo  Carpeta seleccionada: !WATCH_DIR!
 echo.
 
+:: --- API key de Gemini ---
+echo  Necesitas una API key de Google Gemini ^(gratuita^).
+echo  Obtenla en: https://aistudio.google.com/apikey
+echo.
+set /p "GEMINI_KEY=  Pega tu API key aqui: "
+set "GEMINI_KEY=!GEMINI_KEY: =!"
+
+if "!GEMINI_KEY!"=="" (
+    echo.
+    echo  No se ingreso ninguna API key. Instalacion cancelada.
+    echo.
+    pause
+    exit /b 1
+)
+echo.
+
 :: --- Configurar Briner ---
 echo  Configurando Briner...
-"%BRINER_EXE%" --setup --watch-dir "!WATCH_DIR!"
+"%BRINER_EXE%" --setup --watch-dir "!WATCH_DIR!" --api-key "!GEMINI_KEY!"
 set "SETUP_ERR=!ERRORLEVEL!"
 
 if !SETUP_ERR! neq 0 (
