@@ -1,5 +1,6 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
+chcp 65001 >nul 2>&1
 
 echo.
 echo  =====================================================
@@ -11,60 +12,100 @@ set "ROOT=%~dp0"
 set "BRINER_EXE=%ROOT%briner_agent\dist\Briner\Briner.exe"
 set "BRINER_BG_EXE=%ROOT%briner_agent\dist\BrinerBackground\BrinerBackground.exe"
 
+:: --- Verificar archivos necesarios ---
 if not exist "%BRINER_EXE%" (
     echo  ERROR: No se encontro Briner.exe en:
     echo    %BRINER_EXE%
     echo.
     echo  Asegurate de ejecutar este archivo desde la carpeta del proyecto.
-    echo  Si descargaste el proyecto de GitHub, verifica que la carpeta
-    echo  briner_agent\dist\Briner\ exista y tenga Briner.exe
+    echo  Si descargaste el proyecto de GitHub, verifica que exista:
+    echo    briner_agent\dist\Briner\Briner.exe
     echo.
     pause
     exit /b 1
 )
 
-:: Verificar integridad minima del bundle
 if not exist "%ROOT%briner_agent\dist\Briner\_internal\python314.dll" (
-    echo  ERROR: Archivos internos faltantes (_internal\python314.dll).
+    echo  ERROR: Archivos internos faltantes ^(_internal\python314.dll^).
     echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
+    echo.
     pause
     exit /b 1
 )
+
 if not exist "%ROOT%briner_agent\dist\Briner\_internal\_socket.pyd" (
     echo  ERROR: Archivo _socket.pyd faltante.
     echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
+    echo.
     pause
     exit /b 1
 )
 
-echo  Selecciona la carpeta que deseas que Briner organice...
-echo  (Se abrira un dialogo de seleccion de carpeta)
+:: --- Seleccion de carpeta ---
+echo  Selecciona la carpeta que deseas que Briner organice.
+echo  ^(Abriendo dialogo de seleccion -- puede tardar unos segundos^)
 echo.
 
-for /f "usebackq delims=" %%F in (`powershell -NoProfile -Command "Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.FolderBrowserDialog; $d.Description = 'Selecciona la carpeta que Briner organizara automaticamente'; $d.ShowNewFolderButton = $true; if ($d.ShowDialog() -eq 'OK') { $d.SelectedPath } else { '' }"`) do set "WATCH_DIR=%%F"
+set "WATCH_DIR="
+set "PS_TMP=%TEMP%\briner_picker_%RANDOM%.ps1"
 
-if "%WATCH_DIR%"=="" (
+:: Escribir script PS a fichero temporal para evitar problemas de escape
+(
+    echo Add-Type -AssemblyName System.Windows.Forms
+    echo [System.Windows.Forms.Application]::EnableVisualStyles^(^)
+    echo $anchor = New-Object System.Windows.Forms.Form
+    echo $anchor.TopMost = $true
+    echo $anchor.WindowState = 'Minimized'
+    echo $anchor.ShowInTaskbar = $false
+    echo $anchor.Show^(^)
+    echo $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    echo $dlg.Description = 'Selecciona la carpeta que Briner organizara automaticamente'
+    echo $dlg.ShowNewFolderButton = $true
+    echo if ^($dlg.ShowDialog^($anchor^) -eq 'OK'^) ^{ Write-Output $dlg.SelectedPath ^}
+    echo $anchor.Dispose^(^)
+) > "%PS_TMP%"
+
+for /f "usebackq delims=" %%F in (`powershell -NoProfile -ExecutionPolicy Bypass -File "%PS_TMP%"`) do (
+    set "WATCH_DIR=%%F"
+)
+del "%PS_TMP%" >nul 2>&1
+
+:: Si el dialogo fallo o fue cancelado, pedir ruta por texto
+if "!WATCH_DIR!"=="" (
+    echo  No se selecciono carpeta en el dialogo.
+    echo  Escribe la ruta de la carpeta directamente:
     echo.
-    echo  No se selecciono ninguna carpeta. Instalacion cancelada.
+    set /p "WATCH_DIR=  Carpeta ^(ej: C:\Users\tu_usuario\Downloads^): "
+    set "WATCH_DIR=!WATCH_DIR:"=!"
+)
+
+if "!WATCH_DIR!"=="" (
+    echo.
+    echo  No se indico ninguna carpeta. Instalacion cancelada.
     echo.
     pause
     exit /b 1
 )
 
-echo  Carpeta seleccionada: %WATCH_DIR%
+echo.
+echo  Carpeta seleccionada: !WATCH_DIR!
 echo.
 
-:: Guardar configuracion e instalar inicio automatico
-"%BRINER_EXE%" --setup --watch-dir "%WATCH_DIR%"
+:: --- Configurar Briner ---
+echo  Configurando Briner...
+"%BRINER_EXE%" --setup --watch-dir "!WATCH_DIR!"
+set "SETUP_ERR=!ERRORLEVEL!"
 
-if errorlevel 1 (
+if !SETUP_ERR! neq 0 (
     echo.
-    echo  Ocurrio un error durante la configuracion.
+    echo  ERROR ^(!SETUP_ERR!^) al configurar Briner.
+    echo  Revisa los logs en: %APPDATA%\Briner\logs\briner.log
+    echo.
     pause
     exit /b 1
 )
 
-:: Iniciar BrinerBackground en segundo plano
+:: --- Iniciar en segundo plano ---
 if exist "%BRINER_BG_EXE%" (
     echo.
     echo  Iniciando Briner en segundo plano...
@@ -72,8 +113,8 @@ if exist "%BRINER_BG_EXE%" (
     echo  Briner esta corriendo. Revisara tu carpeta cada hora.
 ) else (
     echo.
-    echo  Nota: BrinerBackground.exe no encontrado. Briner se iniciara
-    echo  automaticamente en el proximo inicio de Windows.
+    echo  Nota: BrinerBackground.exe no encontrado junto a Briner.exe.
+    echo  Briner se iniciara automaticamente en el proximo inicio de Windows.
 )
 
 echo.
@@ -81,9 +122,9 @@ echo  =====================================================
 echo    Instalacion completada
 echo  =====================================================
 echo.
-echo  - Briner organizara tu carpeta automaticamente cada hora.
-echo  - Se ejecutara en segundo plano al iniciar Windows.
-echo  - Para cambiar la carpeta, vuelve a ejecutar Install.bat.
-echo  - Los logs se guardan en: %%APPDATA%%\Briner\logs\briner.log
+echo  Carpeta monitoreada : !WATCH_DIR!
+echo  Frecuencia          : cada hora
+echo  Inicio automatico   : al arrancar Windows
+echo  Logs                : %APPDATA%\Briner\logs\briner.log
 echo.
 pause
