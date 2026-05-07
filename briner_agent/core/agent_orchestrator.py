@@ -656,6 +656,7 @@ REGLAS DE OPERACION:
 
         # Fases 2+3: lote LLM con fallback ReAct
         _phase23_start = __import__("time").perf_counter()
+        _time = __import__("time")
         for i in range(0, len(ambiguous), self.llm_batch_size):
             chunk = ambiguous[i : i + self.llm_batch_size]
             _chunk_processed_before = result["processed"]
@@ -669,6 +670,9 @@ REGLAS DE OPERACION:
             )
             metrics.inc(M_FILES_PROCESSED, result["processed"] - _chunk_processed_before)
             metrics.inc(M_FILES_ERRORS, result["errors"] - _chunk_errors_before)
+            # Pace API calls to stay within Gemini free-tier rate limits (15 req/min)
+            if i + self.llm_batch_size < len(ambiguous):
+                _time.sleep(2)
         metrics.record(M_PHASE2_DURATION, __import__("time").perf_counter() - _phase23_start)
 
         return result

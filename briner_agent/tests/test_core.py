@@ -182,7 +182,8 @@ class IntervalLoopTests(unittest.TestCase):
                 return {"processed": 0, "errors": 0}
 
         class FakeDb:
-            pass
+            def get_pending_files(self, limit=None):
+                return []
 
         def fake_scan(workspace_dir, db_manager, config):
             calls.append("scan")

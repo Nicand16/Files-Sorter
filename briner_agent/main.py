@@ -190,13 +190,26 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
     logger.info("Modo interval: ejecutando escaneo inicial inmediato.")
     processed_total = 0
     errors_total = 0
+    needs_scan = True  # skip directory scan in catch-up mode (pending files already in DB)
+    result = {}
     while True:
         if stop_event and stop_event.is_set():
             break
+
+        if needs_scan:
+            if tray:
+                tray.update_stats(status="Escaneando...", pending=0, processed_total=processed_total, errors_total=errors_total, processing=True)
+            try:
+                detected = scan_directory_once(workspace_dir, db_manager, config)
+            except Exception as exc:
+                detected = 0
+                logger.exception("Error en escaneo de directorio: %s", exc)
+        else:
+            detected = 0
+
         if tray:
-            tray.update_stats(status="Procesando...", pending=0, processed_total=processed_total, errors_total=errors_total, processing=True)
+            tray.update_stats(status="Procesando...", pending=result.get("pending", 0), processed_total=processed_total, errors_total=errors_total, processing=True)
         try:
-            detected = scan_directory_once(workspace_dir, db_manager, config)
             if tray:
                 result = orchestrator.process_pending_files(
                     tray=tray,
@@ -235,26 +248,55 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
 
         if once:
             return
-        logger.info("Modo interval: esperando %s segundo(s) para el siguiente escaneo.", poll_interval)
-        if tray:
-            tray.update_stats(status="Esperando...", pending=0, processed_total=processed_total, errors_total=errors_total)
-        deadline = time.monotonic() + poll_interval
-        _sentinel = APPDATA_DIR / ".force_scan"
-        while time.monotonic() < deadline:
-            if stop_event and (stop_event.is_set() or force_scan_event.is_set()):
+
+        # Catch-up mode: skip poll_interval sleep while files remain pending.
+        has_pending = bool(db_manager.get_pending_files(limit=1))
+        if has_pending:
+            needs_scan = False
+            pending_count = result.get("pending", "?")
+            logger.info("Modo ponerse al dia: %s archivos pendientes. Procesando siguiente lote sin espera.", pending_count)
+            if tray:
+                tray.update_stats(
+                    status=f"Poniendo al dia ({pending_count} pend.)...",
+                    pending=pending_count,
+                    processed_total=processed_total,
+                    errors_total=errors_total,
+                )
+            # Brief pause so Gemini rate-limit window can partially recover
+            _catchup_deadline = time.monotonic() + 3
+            _sentinel = APPDATA_DIR / ".force_scan"
+            while time.monotonic() < _catchup_deadline:
+                if stop_event and (stop_event.is_set() or (force_scan_event and force_scan_event.is_set())):
+                    break
+                if _sentinel.exists():
+                    try:
+                        _sentinel.unlink()
+                    except OSError:
+                        pass
+                    break
+                time.sleep(1)
+        else:
+            needs_scan = True
+            logger.info("Modo interval: al dia. Esperando %s segundo(s) para el siguiente escaneo.", poll_interval)
+            if tray:
+                tray.update_stats(status="Esperando...", pending=0, processed_total=processed_total, errors_total=errors_total)
+            deadline = time.monotonic() + poll_interval
+            _sentinel = APPDATA_DIR / ".force_scan"
+            while time.monotonic() < deadline:
+                if stop_event and (stop_event.is_set() or force_scan_event.is_set()):
+                    break
+                if _sentinel.exists():
+                    try:
+                        _sentinel.unlink()
+                    except OSError:
+                        pass
+                    logger.info("Escaneo forzado recibido desde BrinerMonitor.")
+                    break
+                time.sleep(1)
+            if force_scan_event:
+                force_scan_event.clear()
+            if stop_event and stop_event.is_set():
                 break
-            if _sentinel.exists():
-                try:
-                    _sentinel.unlink()
-                except OSError:
-                    pass
-                logger.info("Escaneo forzado recibido desde BrinerMonitor.")
-                break
-            time.sleep(1)
-        if force_scan_event:
-            force_scan_event.clear()
-        if stop_event and stop_event.is_set():
-            break
 
 
 def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, once: bool, stop_event=None, tray=None):
