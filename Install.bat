@@ -130,6 +130,8 @@ if !SETUP_ERR! neq 0 (
 if exist "%BRINER_BG_EXE%" (
     echo.
     echo  Iniciando Briner en segundo plano...
+    taskkill /F /IM BrinerBackground.exe /T >nul 2>&1
+    timeout /t 1 /nobreak >nul
     start "" "%BRINER_BG_EXE%" --no-wizard
     echo  Briner esta corriendo. Revisara tu carpeta cada hora.
 ) else (
@@ -140,17 +142,27 @@ if exist "%BRINER_BG_EXE%" (
 
 :: --- Acceso directo al monitor en el Escritorio ---
 if exist "%BRINER_MON_EXE%" (
-    set "MON_EXE_STR=!BRINER_MON_EXE!"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-        "$desktop = [Environment]::GetFolderPath('Desktop'); ^
-         $lnk = Join-Path $desktop 'Briner Monitor.lnk'; ^
-         $shell = New-Object -ComObject WScript.Shell; ^
-         $link = $shell.CreateShortcut($lnk); ^
-         $link.TargetPath = '!MON_EXE_STR!'; ^
-         $link.Description = 'Ver actividad de Briner en tiempo real'; ^
-         $link.Save()"
+    set "LNK_TMP=%TEMP%\briner_monitor_lnk_%RANDOM%.ps1"
+    (
+        echo $desktop = [Environment]::GetFolderPath^('Desktop'^)
+        echo $lnk = Join-Path $desktop 'Briner Monitor.lnk'
+        echo $shell = New-Object -ComObject WScript.Shell
+        echo $link = $shell.CreateShortcut^($lnk^)
+        echo $link.TargetPath = '!BRINER_MON_EXE!'
+        echo $link.Description = 'Ver actividad de Briner en tiempo real'
+        echo $link.Save^(^)
+    ) > "!LNK_TMP!"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "!LNK_TMP!" >nul 2>&1
+    del "!LNK_TMP!" >nul 2>&1
     echo.
     echo  Acceso directo "Briner Monitor" creado en el Escritorio.
+)
+
+:: --- Abrir monitor inmediatamente para verificar que funciona ---
+if exist "%BRINER_MON_EXE%" (
+    echo.
+    echo  Abriendo Briner Monitor...
+    start "" "%BRINER_MON_EXE%"
 )
 
 echo.
@@ -162,6 +174,11 @@ echo  Carpeta monitoreada : !WATCH_DIR!
 echo  Frecuencia          : cada hora
 echo  Inicio automatico   : al arrancar Windows
 echo  Logs                : %APPDATA%\Briner\logs\briner.log
-echo  Monitor             : "Briner Monitor" en el Escritorio
+echo  Monitor             : "Briner Monitor" en el Escritorio ^(se abrio ahora^)
+echo.
+echo  Icono de bandeja    : busca el circulo de colores en la bandeja
+echo                        del sistema ^(esquina inferior derecha^).
+echo                        Si no lo ves, haz clic en la flecha ^ para
+echo                        ver los iconos ocultos.
 echo.
 pause
