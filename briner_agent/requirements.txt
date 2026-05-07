@@ -8,3 +8,5 @@ python-docx
 pytest
 pyinstaller
 python-dotenv
+pystray
+Pillow
