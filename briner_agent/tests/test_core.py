@@ -4,6 +4,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -14,6 +15,7 @@ from modules.multimodal_parser import extract_document_content
 from modules.periodic_scanner import scan_directory_once
 from modules.rules_engine import classify_file
 from core.settings_manager import validate_poll_interval, validate_watch_directory
+from main import _run_interval_loop
 
 
 class RulesEngineTests(unittest.TestCase):
@@ -137,6 +139,35 @@ class PeriodicScannerTests(unittest.TestCase):
 
             self.assertEqual(count, 1)
             self.assertEqual(db.registered[0][0], "new.pdf")
+
+
+class IntervalLoopTests(unittest.TestCase):
+    def test_interval_loop_scans_immediately_before_sleep(self):
+        calls = []
+
+        class FakeOrchestrator:
+            def process_pending_files(self):
+                calls.append("process")
+                return {"processed": 0, "errors": 0}
+
+        class FakeDb:
+            pass
+
+        def fake_scan(workspace_dir, db_manager, config):
+            calls.append("scan")
+            return 0
+
+        def fake_sleep(seconds):
+            calls.append(("sleep", seconds))
+            raise RuntimeError("stop loop")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with patch("main.scan_directory_once", side_effect=fake_scan), patch("main.time.sleep", side_effect=fake_sleep):
+                with self.assertRaises(RuntimeError):
+                    _run_interval_loop(FakeOrchestrator(), FakeDb(), workspace, {}, 3600, once=False)
+
+        self.assertEqual(calls, ["scan", "process", ("sleep", 3600)])
 
 
 class ParserTests(unittest.TestCase):

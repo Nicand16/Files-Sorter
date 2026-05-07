@@ -1,20 +1,14 @@
-<<<<<<< HEAD
-import importlib.util
+﻿import importlib.util
 import logging
 import re
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree
 
-=======
-import logging
-from pathlib import Path
->>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
 DEFAULT_MAX_CHARS = 3000
 TEXT_EXTENSIONS = {".txt", ".csv", ".md", ".json", ".log", ".yaml", ".yml", ".xml"}
 
@@ -130,32 +124,4 @@ def analyze_document_content(file_path: str) -> str:
 
 def get_parser_tools():
     """Retorna la lista de herramientas de analisis multimodal para LangChain."""
-=======
-@tool
-def analyze_document_content(file_path: str) -> str:
-    """
-    Lee y resume el contenido preliminar de un documento de texto o datos (soporta .txt, .csv, .md, .json).
-    Útil para saber exactamente de qué trata el archivo antes de tomar la decisión de dónde categorizarlo o moverlo.
-    """
-    try:
-        path = Path(file_path)
-        if not path.exists():
-            return "Error: Archivo no encontrado en disco."
-            
-        # Extracción simple y segura (primeros 1000 caracteres)
-        if path.suffix.lower() in ['.txt', '.csv', '.md', '.json', '.log']:
-            with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read(1500)
-            logger.info(f"Acción (analyze_document_content): Contenido extraído de {path.name}")
-            return f"El contenido inicial del documento es:\n\n{content}\n[...]"
-        else:
-            return f"Aviso: El archivo {path.name} es un binario o su formato no es legible como texto plano. Analiza basándote exclusivamente en su nombre y extensión."
-            
-    except Exception as e:
-        logger.error(f"Error analizando documento: {e}")
-        return f"Error técnico al leer documento: {str(e)}"
-
-def get_parser_tools():
-    """Retorna la lista de herramientas de análisis multimodal para LangChain."""
->>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
     return [analyze_document_content]

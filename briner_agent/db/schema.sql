@@ -1,4 +1,4 @@
--- db/schema.sql
+﻿-- db/schema.sql
 -- Tabla principal para registrar el estado y metadatos de los archivos del workspace
 CREATE TABLE IF NOT EXISTS files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS files (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Tabla para mantener un registro de auditoría/logs de las acciones tomadas por la IA
+-- Tabla para mantener un registro de auditorÃ­a/logs de las acciones tomadas por la IA
 CREATE TABLE IF NOT EXISTS actions_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id INTEGER,
@@ -20,7 +20,6 @@ CREATE TABLE IF NOT EXISTS actions_log (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
 );
-<<<<<<< HEAD
 
 -- Registro detallado de decisiones de clasificacion y movimientos propuestos/ejecutados
 CREATE TABLE IF NOT EXISTS classification_events (
@@ -37,5 +36,3 @@ CREATE TABLE IF NOT EXISTS classification_events (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
-=======
->>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
