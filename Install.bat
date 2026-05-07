@@ -11,6 +11,7 @@ echo.
 set "ROOT=%~dp0"
 set "BRINER_EXE=%ROOT%briner_agent\dist\Briner\Briner.exe"
 set "BRINER_BG_EXE=%ROOT%briner_agent\dist\BrinerBackground\BrinerBackground.exe"
+set "BRINER_MON_EXE=%ROOT%briner_agent\dist\BrinerMonitor\BrinerMonitor.exe"
 
 :: --- Verificar archivos necesarios ---
 if not exist "%BRINER_EXE%" (
@@ -137,6 +138,21 @@ if exist "%BRINER_BG_EXE%" (
     echo  Briner se iniciara automaticamente en el proximo inicio de Windows.
 )
 
+:: --- Acceso directo al monitor en el Escritorio ---
+if exist "%BRINER_MON_EXE%" (
+    set "MON_EXE_STR=!BRINER_MON_EXE!"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "$desktop = [Environment]::GetFolderPath('Desktop'); ^
+         $lnk = Join-Path $desktop 'Briner Monitor.lnk'; ^
+         $shell = New-Object -ComObject WScript.Shell; ^
+         $link = $shell.CreateShortcut($lnk); ^
+         $link.TargetPath = '!MON_EXE_STR!'; ^
+         $link.Description = 'Ver actividad de Briner en tiempo real'; ^
+         $link.Save()"
+    echo.
+    echo  Acceso directo "Briner Monitor" creado en el Escritorio.
+)
+
 echo.
 echo  =====================================================
 echo    Instalacion completada
@@ -146,5 +162,6 @@ echo  Carpeta monitoreada : !WATCH_DIR!
 echo  Frecuencia          : cada hora
 echo  Inicio automatico   : al arrancar Windows
 echo  Logs                : %APPDATA%\Briner\logs\briner.log
+echo  Monitor             : "Briner Monitor" en el Escritorio
 echo.
 pause

@@ -443,34 +443,71 @@ def main():
 
     stop_event = threading.Event()
     force_scan_event = threading.Event()
-    tray = None
-    if not args.once:
+
+    if args.once:
+        # --once: no tray, direct single-pass processing
+        _run_startup_checks(workspace_dir, orchestrator)
         try:
-            from modules.tray_icon import BrinerTrayIcon
-            tray = BrinerTrayIcon(
-                workspace_dir=workspace_dir,
-                appdata_dir=APPDATA_DIR,
-                stop_event=stop_event,
-                force_scan_event=force_scan_event,
-            )
-            tray.start()
-            orchestrator.set_tray(tray)
-        except Exception as exc:
-            logger.warning("No se pudo iniciar el icono de bandeja del sistema: %s", exc)
-            tray = None
+            if mode == "realtime":
+                _run_realtime_loop(orchestrator, db_manager, workspace_dir, config,
+                                   once=True, stop_event=stop_event)
+            else:
+                _run_interval_loop(orchestrator, db_manager, workspace_dir, config,
+                                   poll_interval, once=True, stop_event=stop_event,
+                                   force_scan_event=force_scan_event)
+        except KeyboardInterrupt:
+            logger.info("Briner se ha detenido correctamente por orden del usuario.")
+        return
+
+    # Background (continuous) mode —
+    # pystray.Icon.run() MUST execute on the main thread on Windows (frozen, console=False).
+    tray = None
+    try:
+        from modules.tray_icon import BrinerTrayIcon
+        tray = BrinerTrayIcon(
+            workspace_dir=workspace_dir,
+            appdata_dir=APPDATA_DIR,
+            stop_event=stop_event,
+            force_scan_event=force_scan_event,
+        )
+        orchestrator.set_tray(tray)
+    except Exception as exc:
+        logger.warning("No se pudo crear el icono de bandeja del sistema: %s", exc)
+        tray = None
 
     _run_startup_checks(workspace_dir, orchestrator, tray=tray)
 
-    try:
-        if mode == "realtime":
-            _run_realtime_loop(orchestrator, db_manager, workspace_dir, config, args.once, stop_event=stop_event, tray=tray)
-        else:
-            _run_interval_loop(orchestrator, db_manager, workspace_dir, config, poll_interval, args.once, stop_event=stop_event, force_scan_event=force_scan_event, tray=tray)
-    except KeyboardInterrupt:
-        logger.info("Briner se ha detenido correctamente por orden del usuario.")
-    finally:
-        if tray:
+    def _bg_loop():
+        try:
+            if mode == "realtime":
+                _run_realtime_loop(orchestrator, db_manager, workspace_dir, config,
+                                   once=False, stop_event=stop_event, tray=tray)
+            else:
+                _run_interval_loop(orchestrator, db_manager, workspace_dir, config,
+                                   poll_interval, once=False, stop_event=stop_event,
+                                   force_scan_event=force_scan_event, tray=tray)
+        except Exception as exc:
+            logger.exception("Error fatal en loop de procesamiento: %s", exc)
+            stop_event.set()
+
+    bg = threading.Thread(target=_bg_loop, daemon=True, name="BrinerLoop")
+    bg.start()
+
+    if tray:
+        try:
+            tray.run_main_thread()  # Blocks on main thread until stop() is called
+        except Exception as exc:
+            logger.error("Error en el icono de bandeja del sistema: %s", exc)
+        finally:
+            stop_event.set()
             tray.stop()
+    else:
+        # No tray: run until bg thread exits or KeyboardInterrupt
+        try:
+            bg.join()
+        except KeyboardInterrupt:
+            logger.info("Briner se ha detenido correctamente por orden del usuario.")
+            stop_event.set()
 
 
 if __name__ == "__main__":

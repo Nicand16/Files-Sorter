@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import threading
 from pathlib import Path
 
@@ -187,6 +188,7 @@ class BrinerTrayIcon:
         items.extend(
             [
                 pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Abrir monitor en tiempo real", self._open_monitor),
                 pystray.MenuItem("Ver logs", self._open_logs),
                 pystray.MenuItem("Abrir carpeta monitoreada", self._open_workspace),
                 pystray.MenuItem("Forzar escaneo ahora", self._force_scan),
@@ -195,6 +197,18 @@ class BrinerTrayIcon:
             ]
         )
         return pystray.Menu(*items)
+
+    def _open_monitor(self, icon, item):
+        import subprocess
+        # When frozen: BrinerMonitor.exe lives next to BrinerBackground.exe in dist/
+        monitor_exe = Path(sys.executable).parent.parent / "BrinerMonitor" / "BrinerMonitor.exe"
+        if monitor_exe.exists():
+            subprocess.Popen([str(monitor_exe)])
+            return
+        # Dev-mode fallback: run monitor.py with the current Python interpreter
+        monitor_script = Path(__file__).resolve().parent.parent / "monitor.py"
+        if monitor_script.exists():
+            subprocess.Popen([sys.executable, str(monitor_script)])
 
     def _open_logs(self, icon, item):
         log_dir = self.appdata_dir / "logs"
@@ -213,6 +227,26 @@ class BrinerTrayIcon:
     def _quit(self, icon, item):
         self.stop_event.set()
         icon.stop()
+
+    def run_main_thread(self):
+        """Run pystray.Icon.run() on the calling thread (must be the main thread on Windows).
+
+        Blocks until stop() is called. Use this instead of start() when running as a frozen
+        windowless exe — Win32 requires the message pump on the main thread.
+        """
+        import pystray
+        with self._lock:
+            color = self._color
+            status = self._status
+            error_message = self.last_error_message
+        img = _make_icon(color)
+        self._icon = pystray.Icon(
+            "Briner",
+            img,
+            self._title(status, error_message),
+            menu=self._build_menu(),
+        )
+        self._icon.run(setup=self._flush_pending_notifications)
 
     def start(self):
         t = threading.Thread(target=self._run, daemon=True, name="BrinerTray")

@@ -49,11 +49,21 @@ if errorlevel 1 (
 )
 
 echo.
+echo  Compilando BrinerMonitor.exe (ventana de monitoreo en tiempo real)...
+python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
+if errorlevel 1 (
+    echo  ERROR al compilar BrinerMonitor.exe
+    pause
+    exit /b 1
+)
+
+echo.
 echo  =====================================================
 echo    Compilacion exitosa
 echo  =====================================================
 echo.
-echo  dist\Briner\Briner.exe              (setup y diagnostico)
-echo  dist\BrinerBackground\BrinerBackground.exe  (servicio en fondo)
+echo  dist\Briner\Briner.exe                          (setup y diagnostico)
+echo  dist\BrinerBackground\BrinerBackground.exe      (servicio en fondo)
+echo  dist\BrinerMonitor\BrinerMonitor.exe            (monitor en tiempo real)
 echo.
 pause
