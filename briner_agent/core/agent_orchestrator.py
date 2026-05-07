@@ -97,6 +97,11 @@ class BrinerOrchestrator:
         cb_threshold = int(config.get("processing", {}).get("circuit_breaker_threshold", 3))
         cb_recovery = float(config.get("processing", {}).get("circuit_breaker_recovery_seconds", 60.0))
         self._circuit = CircuitBreaker("gemini", cb_threshold, cb_recovery)
+        # Decision cache: avoids redundant LLM calls for files with same extension+stem pattern
+        from classifiers.decision_cache import DecisionCache
+        cache_size = int(config.get("processing", {}).get("decision_cache_size", 200))
+        cache_ttl = float(config.get("processing", {}).get("decision_cache_ttl_seconds", 3600.0))
+        self._cache = DecisionCache(max_size=cache_size, ttl_seconds=cache_ttl)
 
     @property
     def llm(self):
@@ -449,9 +454,39 @@ REGLAS DE OPERACION:
     ):
         """
         Intenta clasificar el chunk con una sola llamada LLM.
-        Si falla, usa el agente ReAct por archivo como fallback.
+        Consulta el cache de decisiones primero para evitar llamadas redundantes.
+        Si el LLM falla, usa el agente ReAct por archivo como fallback.
         Libera los paths reclamados al terminar.
         """
+        # --- Decision cache: apply hits immediately, send misses to LLM ---
+        cache_hits = []
+        cache_misses = []
+        for f in files:
+            cached = self._cache.get(f["filename"], f.get("extension") or "")
+            if cached is not None:
+                cache_hits.append((f, cached))
+                metrics.inc(M_CACHE_HITS)
+            else:
+                cache_misses.append(f)
+                metrics.inc(M_CACHE_MISSES)
+
+        for f, category in cache_hits:
+            filepath = f["filepath"]
+            try:
+                self._apply_move(filepath, category, "cache", "Categoria del cache de decisiones.")
+                result["processed"] += 1
+            except Exception as e:
+                logger.error("Error aplicando cache hit para %s: %s", f["filename"], e)
+                self.db.update_file_status(filepath, "error")
+                result["errors"] += 1
+                self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e))
+            finally:
+                self._release_path(filepath)
+
+        if not cache_misses:
+            return
+        files = cache_misses
+
         if self.llm:
             self._update_tray_progress(
                 tray,
@@ -470,6 +505,7 @@ REGLAS DE OPERACION:
                     category = by_path.get(filepath, "Varios")
                     try:
                         self._apply_move(filepath, category, "llm_batch", "Clasificacion en lote por LLM.")
+                        self._cache.put(f["filename"], f.get("extension") or "", category, "llm_batch")
                         result["processed"] += 1
                         successful += 1
                     except Exception as e:

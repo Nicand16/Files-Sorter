@@ -81,7 +81,7 @@ class EventBus:
 
     def unsubscribe(self, handler: Handler):
         with self._lock:
-            self._handlers = [h for h in self._handlers if h is not handler]
+            self._handlers = [h for h in self._handlers if h != handler]
 
     def publish(self, event: FileEvent):
         with self._lock:
