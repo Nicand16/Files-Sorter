@@ -158,6 +158,7 @@ def build_arg_parser():
     parser.add_argument("--undo-last", action="store_true", help="Deshace el ultimo movimiento real registrado.")
     parser.add_argument("--setup", action="store_true", help="Fuerza el wizard de configuracion inicial.")
     parser.add_argument("--no-wizard", action="store_true", help="Usa config/defaults sin pedir settings iniciales.")
+    parser.add_argument("--watch-dir", default=None, help="Carpeta a monitorear (omite el wizard interactivo).")
     return parser
 
 
@@ -230,6 +231,7 @@ def main():
         config,
         settings_path,
         prompt_if_missing=not args.no_wizard,
+        default_dir=getattr(args, 'watch_dir', None),
     )
 
     # On first-time setup (frozen exe), auto-install Windows startup shortcut and exit.
