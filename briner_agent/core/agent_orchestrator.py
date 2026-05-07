@@ -27,6 +27,7 @@ from infra.metrics import (
 )
 from modules.crud_executor import consume_thread_moves, move_file_secure
 from modules.rules_engine import build_taxonomy_prompt, classify_file
+from runtime.event_bus import FileEvent, FileState, bus
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,9 @@ class BrinerOrchestrator:
 
     def set_tray(self, tray):
         self._tray = tray
+
+    def _emit(self, state: FileState, filepath: str, filename: str, **kwargs):
+        bus.publish(FileEvent(state=state, filepath=filepath, filename=filename, **kwargs))
 
     def _notify_error(self, message: str, notify: bool = True):
         logger.error(message)
@@ -189,6 +193,7 @@ REGLAS DE OPERACION:
                 dry_run=self.dry_run,
             )
             self.db.update_file_status(filepath, "processed")
+            self._emit(FileState.IGNORED, filepath, filename, decision_source="rule", reason=decision.reason)
             return True
 
         move_result = move_file_secure(
@@ -218,6 +223,7 @@ REGLAS DE OPERACION:
         else:
             self.db.update_file_path(filepath, move_result["new_path"], "processed")
         logger.info(move_result["message"])
+        self._emit(FileState.MOVED, filepath, filename, category=decision.category, decision_source="rule")
         return True
 
     # ------------------------------------------------------------------ #
@@ -226,6 +232,7 @@ REGLAS DE OPERACION:
 
     def _apply_move(self, filepath: str, category: str, decision_source: str, reason: str):
         """Mueve un archivo a la categoria indicada y registra el evento en DB."""
+        filename = Path(filepath).name
         move_result = move_file_secure(
             source_path=filepath,
             destination_folder_name=category,
@@ -249,10 +256,11 @@ REGLAS DE OPERACION:
         )
         self.db.log_action(filepath, f"{decision_source}_move", move_result["message"])
         if move_result.get("dry_run"):
-            logger.info("Dry-run: %s permanece pendiente.", Path(filepath).name)
+            logger.info("Dry-run: %s permanece pendiente.", filename)
         else:
             self.db.update_file_path(filepath, move_result["new_path"], "processed")
         logger.info(move_result["message"])
+        self._emit(FileState.MOVED, filepath, filename, category=category, decision_source=decision_source)
 
     def _move_to_fallback_category(self, filepath: str, category: str, reason: str):
         self._apply_move(filepath, category, "system", reason)
@@ -363,11 +371,13 @@ REGLAS DE OPERACION:
         except MoveFailureError as e:
             logger.error("Movimiento fallido en agente ReAct para %s: %s", filename, e)
             self.db.update_file_status(filepath, "error")
+            self._emit(FileState.ERROR, filepath, filename, reason=str(e))
             return "error"
         except Exception as e:
             logger.error("Error en agente ReAct para %s: %s", filename, e)
             self._record_api_failure(str(e))
             self.db.update_file_status(filepath, "error")
+            self._emit(FileState.ERROR, filepath, filename, reason=str(e))
             return "error"
 
     # ------------------------------------------------------------------ #
@@ -429,6 +439,7 @@ REGLAS DE OPERACION:
                         logger.error("Error aplicando movimiento de lote para %s: %s", f["filename"], e)
                         self.db.update_file_status(filepath, "error")
                         result["errors"] += 1
+                        self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e))
                     finally:
                         self._release_path(filepath)
                 self._update_tray_progress(
@@ -466,6 +477,7 @@ REGLAS DE OPERACION:
                 logger.error("Movimiento fallido en fallback individual para %s: %s", f["filename"], e)
                 self.db.update_file_status(filepath, "error")
                 result["errors"] += 1
+                self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e))
             except Exception as e:
                 logger.error("Error en fallback individual para %s: %s — moviendo a Varios.", f["filename"], e)
                 try:
@@ -475,6 +487,7 @@ REGLAS DE OPERACION:
                     logger.error("Fallback a Varios tambien fallo para %s: %s", f["filename"], e2)
                     self.db.update_file_status(filepath, "error")
                     result["errors"] += 1
+                    self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e2))
             finally:
                 self._release_path(filepath)
 
@@ -528,10 +541,12 @@ REGLAS DE OPERACION:
             for file_record in pending_files:
                 filepath = file_record["filepath"]
                 filename = file_record["filename"]
+                self._emit(FileState.QUEUED, filepath, filename)
                 if not self._claim_path(filepath):
                     logger.debug("Archivo ya en procesamiento: %s", filename)
                     result["skipped"] += 1
                     continue
+                self._emit(FileState.PROCESSING, filepath, filename)
                 try:
                     rule_result = self._process_with_rule(filepath, filename, file_record.get("extension"))
                     if rule_result:
@@ -546,6 +561,7 @@ REGLAS DE OPERACION:
                     self._release_path(filepath)
                     result["errors"] += 1
                     metrics.inc(M_FILES_ERRORS)
+                    self._emit(FileState.ERROR, filepath, filename, reason=str(e))
 
         self._update_tray_progress(
             tray,

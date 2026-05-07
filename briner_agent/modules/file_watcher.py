@@ -5,6 +5,8 @@ from pathlib import Path
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from runtime.event_bus import FileEvent, FileState, bus
+
 logger = logging.getLogger(__name__)
 
 
@@ -81,19 +83,34 @@ class BrinerEventHandler(FileSystemEventHandler):
         if not self._should_register(filepath):
             return
         info = self._get_file_info(filepath)
-        self.db.register_file(*info)
+        if self.db.register_file(*info):
+            bus.publish(FileEvent(
+                state=FileState.DETECTED,
+                filepath=str(Path(filepath).resolve()),
+                filename=Path(filepath).name,
+            ))
 
     def on_created(self, event):
         if event.is_directory or not self._should_register(event.src_path):
             return
         logger.info("[CREADO] Archivo detectado: %s", event.src_path)
-        self.db.register_file(*self._get_file_info(event.src_path))
+        if self.db.register_file(*self._get_file_info(event.src_path)):
+            bus.publish(FileEvent(
+                state=FileState.DETECTED,
+                filepath=str(Path(event.src_path).resolve()),
+                filename=Path(event.src_path).name,
+            ))
 
     def on_modified(self, event):
         if event.is_directory or not self._should_register(event.src_path):
             return
         logger.info("[MODIFICADO] Archivo actualizado: %s", event.src_path)
-        self.db.register_file(*self._get_file_info(event.src_path))
+        if self.db.register_file(*self._get_file_info(event.src_path)):
+            bus.publish(FileEvent(
+                state=FileState.DETECTED,
+                filepath=str(Path(event.src_path).resolve()),
+                filename=Path(event.src_path).name,
+            ))
 
     def on_deleted(self, event):
         if event.is_directory:

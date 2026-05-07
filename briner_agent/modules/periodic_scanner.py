@@ -2,6 +2,8 @@ import fnmatch
 import logging
 from pathlib import Path
 
+from runtime.event_bus import FileEvent, FileState, bus
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_IGNORED_FILENAMES = {".keep", "desktop.ini"}
@@ -69,6 +71,11 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
                 continue
             if db_manager.register_file(*_file_info(path)):
                 detected += 1
+                bus.publish(FileEvent(
+                    state=FileState.DETECTED,
+                    filepath=str(path.resolve()),
+                    filename=path.name,
+                ))
         except OSError as exc:
             logger.warning("No se pudo registrar %s: %s", path, exc)
 
