@@ -1,6 +1,5 @@
 import json
 import logging
-import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -119,8 +118,8 @@ def load_or_create_user_settings(
 ) -> dict:
     user_settings = load_user_settings(settings_path)
     if not user_settings and prompt_if_missing:
-        if sys.stdin and sys.stdin.isatty():
+        try:
             user_settings = prompt_for_initial_settings(settings_path)
-        else:
-            logger.warning("Settings de usuario no encontrados y no hay consola interactiva. Usando defaults seguros.")
+        except (EOFError, KeyboardInterrupt):
+            logger.warning("No se pudo mostrar el wizard interactivo. Usando defaults seguros.")
     return merge_settings(config, user_settings)
