@@ -239,8 +239,16 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
         if tray:
             tray.update_stats(status="Esperando...", pending=0, processed_total=processed_total, errors_total=errors_total)
         deadline = time.monotonic() + poll_interval
+        _sentinel = APPDATA_DIR / ".force_scan"
         while time.monotonic() < deadline:
             if stop_event and (stop_event.is_set() or force_scan_event.is_set()):
+                break
+            if _sentinel.exists():
+                try:
+                    _sentinel.unlink()
+                except OSError:
+                    pass
+                logger.info("Escaneo forzado recibido desde BrinerMonitor.")
                 break
             time.sleep(1)
         if force_scan_event:
@@ -265,8 +273,16 @@ def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: di
     monitor.start()
     if tray:
         tray.update_stats(status="Corriendo (tiempo real)", processed_total=0, errors_total=0)
+    _rt_sentinel = APPDATA_DIR / ".force_scan"
     try:
         while not (stop_event and stop_event.is_set()):
+            if _rt_sentinel.exists():
+                try:
+                    _rt_sentinel.unlink()
+                except OSError:
+                    pass
+                logger.info("Escaneo forzado recibido desde BrinerMonitor (realtime).")
+                scan_directory_once(workspace_dir, db_manager, config)
             try:
                 if tray:
                     result = orchestrator.process_pending_files(

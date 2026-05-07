@@ -3,17 +3,22 @@ briner_agent/monitor.py
 
 Standalone monitoring window for Briner.
 Reads from the shared SQLite database and shows real-time activity.
-No external dependencies — only stdlib (tkinter, sqlite3).
+Minimizing hides the window to the system tray; force-scan button signals
+BrinerBackground via a sentinel file to run a classification cycle immediately.
 """
 
 import json
 import os
 import sqlite3
 import sys
+import threading
 import tkinter as tk
 import tkinter.messagebox
 from pathlib import Path
 from tkinter import ttk
+
+import pystray
+from PIL import Image, ImageDraw
 
 # --- Path resolution (mirrors main.py logic) ---
 IS_FROZEN = getattr(sys, "frozen", False)
@@ -24,14 +29,23 @@ if IS_FROZEN:
         if _appdata
         else Path.home() / "AppData" / "Roaming" / "Briner"
     )
-    DB_PATH = _briner_dir / "briner.db"
-    SETTINGS_PATH = _briner_dir / "user_settings.json"
-    LOGS_DIR = _briner_dir / "logs"
 else:
-    _code_dir = Path(__file__).resolve().parent
-    DB_PATH = _code_dir / "db" / "briner.db"
-    SETTINGS_PATH = _code_dir / "user_settings.json"
-    LOGS_DIR = _code_dir / "logs"
+    # Dev mode: APPDATA_DIR == CODE_DIR == briner_agent/ (mirrors main.py)
+    _briner_dir = Path(__file__).resolve().parent
+
+DB_PATH = _briner_dir / "briner.db" if IS_FROZEN else _briner_dir / "db" / "briner.db"
+SETTINGS_PATH = _briner_dir / "user_settings.json"
+LOGS_DIR = _briner_dir / "logs"
+
+_SENTINEL = _briner_dir / ".force_scan"  # inter-process signal file
+
+
+def _make_tray_image() -> Image.Image:
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    draw.ellipse([4, 4, 60, 60], fill=(59, 130, 246, 255))  # blue circle
+    return img
+
 
 _QUERY_EVENTS = """
 SELECT
@@ -85,6 +99,9 @@ class BrinerMonitorApp:
         root.title(title)
         root.minsize(640, 400)
         root.geometry("940x540")
+        self._tray: pystray.Icon | None = None
+        root.bind('<Unmap>', self._on_minimize)
+        root.protocol('WM_DELETE_WINDOW', self._on_close)
         self._build_ui()
         self._refresh()
 
@@ -103,6 +120,7 @@ class BrinerMonitorApp:
 
         btn_frame = tk.Frame(top)
         btn_frame.pack(side=tk.RIGHT)
+        tk.Button(btn_frame, text="⚡ Forzar escaneo", command=self._force_scan).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="↺ Actualizar ahora", command=self._refresh).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="Abrir logs", command=self._open_logs).pack(side=tk.LEFT, padx=4)
 
@@ -188,6 +206,13 @@ class BrinerMonitorApp:
             self._status_dot.config(fg="gray")
             self._status_label.config(text="Sin actividad reciente")
 
+    def _force_scan(self):
+        try:
+            _SENTINEL.touch()
+            self._status_label.config(text="Escaneo solicitado — Briner procesará en breve")
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo solicitar escaneo:\n{exc}")
+
     def _open_logs(self):
         if LOGS_DIR.exists():
             os.startfile(str(LOGS_DIR))
@@ -195,6 +220,40 @@ class BrinerMonitorApp:
             tkinter.messagebox.showinfo(
                 "Briner Monitor", f"Carpeta de logs no encontrada:\n{LOGS_DIR}"
             )
+
+    # --- System tray on minimize ---
+
+    def _on_minimize(self, event: tk.Event):
+        if event.widget is self.root:
+            self.root.after(1, self._hide_to_tray)
+
+    def _hide_to_tray(self):
+        self.root.withdraw()
+        if self._tray is None:
+            menu = pystray.Menu(
+                pystray.MenuItem("Mostrar Briner Monitor", self._restore, default=True),
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem("Cerrar", self._on_close),
+            )
+            self._tray = pystray.Icon("BrinerMonitor", _make_tray_image(), "Briner Monitor", menu)
+            threading.Thread(target=self._tray.run, daemon=True, name="MonitorTray").start()
+
+    def _restore(self, icon=None, item=None):
+        if self._tray:
+            self._tray.stop()
+            self._tray = None
+        self.root.after_idle(self._do_restore)
+
+    def _do_restore(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _on_close(self, icon=None, item=None):
+        if self._tray:
+            self._tray.stop()
+            self._tray = None
+        self.root.after_idle(self.root.destroy)
 
 
 def main():
