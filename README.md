@@ -1,83 +1,141 @@
-# Briner File Organizer
+# Briner - Organizador automático de archivos
 
-Briner is a Windows-friendly Python app that organizes files by scanning a target folder periodically. It is designed for low-resource background use: the default mode is interval scanning, while realtime monitoring with `watchdog` remains available as an optional mode.
+Briner organiza automáticamente los archivos de una carpeta (por ejemplo, `Descargas`) cada hora, moviéndolos a subcarpetas según su tipo. Se ejecuta en segundo plano al iniciar Windows.
 
-## Features
+## Uso para usuarios finales
 
-- Periodic folder scans, recommended every hour.
-- Optional realtime monitoring.
-- Deterministic rules before LLM classification.
-- Gemini support through `GOOGLE_API_KEY` or `GEMINI_API_KEY`.
-- Dry-run mode for safe simulation.
-- SQLite audit/state database.
-- Windows `.exe` packaging with PyInstaller.
-- Optional startup shortcut for running at login.
+1. Descarga o clona este repositorio.
+2. Haz doble clic en **`Install.bat`**.
+3. Escribe la ruta de la carpeta que deseas organizar (ej. `C:\Users\tu_usuario\Downloads`).
+4. ¡Listo! Briner se ejecutará automáticamente cada vez que inicies Windows.
 
-## Quick Start
+No se requiere instalar Python ni ninguna dependencia adicional.
+
+## Carpetas de destino
+
+Los archivos se organizan en estas subcarpetas dentro de la carpeta elegida:
+
+| Carpeta | Contenido |
+|---|---|
+| `1. Universidad y Estudio` | Tareas, libros, materiales académicos |
+| `2. Software y Herramientas` | Instaladores, comprimidos |
+| `3. Juegos y Emulación` | ROMs, ISOs, torrents de juegos |
+| `4. Multimedia` | Imágenes, videos, audio |
+| `5. Trabajo y Empleo` | CVs, contratos, ofertas laborales |
+| `6. Documentos Personales` | Cédula, facturas, certificados |
+| `7. Varios` | Todo lo que no encaja en otra categoría |
+
+## Clasificación con IA (opcional)
+
+Para que archivos ambiguos sean clasificados con inteligencia artificial (Gemini), crea un archivo `.env` en `%APPDATA%\Briner\` con tu API key:
+
+```text
+GOOGLE_API_KEY=tu_api_key_aqui
+```
+
+Sin API key, Briner funciona igual usando solo reglas locales por extensión y palabras clave.
+
+## Comandos útiles (con consola)
+
+```powershell
+# Verificar que está corriendo
+Get-Process BrinerBackground -ErrorAction SilentlyContinue
+
+# Detener temporalmente
+Get-Process BrinerBackground -ErrorAction SilentlyContinue | Stop-Process
+
+# Ejecutar una pasada manual y ver resultados en consola
+cd briner_agent\dist\Briner
+.\Briner.exe --once
+
+# Simular sin mover archivos
+.\Briner.exe --once --dry-run
+
+# Ver métricas
+.\Briner.exe --metrics
+
+# Reconfigurar carpeta (vuelve a pedir solo la carpeta)
+.\Briner.exe --setup
+```
+
+## Logs
+
+```text
+%APPDATA%\Briner\logs\briner.log
+```
+
+```powershell
+Get-Content "$env:APPDATA\Briner\logs\briner.log" -Tail 40
+```
+
+## Cambiar la carpeta monitoreada
+
+Vuelve a ejecutar `Install.bat` o edita:
+
+```text
+%APPDATA%\Briner\user_settings.json
+```
+
+## Para desarrolladores
+
+### Estructura del proyecto
+
+```
+Files Sorter/
+  Install.bat                    ← instalador para usuarios finales
+  briner_agent/
+    main.py                      ← punto de entrada
+    config.yaml                  ← taxonomía y configuración base
+    core/
+      settings_manager.py        ← manejo de configuración de usuario
+      agent_orchestrator.py      ← orquestador principal
+      llm_engine.py              ← motor Gemini (opcional)
+    modules/
+      periodic_scanner.py        ← escaneo por intervalo
+      rules_engine.py            ← clasificación por reglas
+      crud_executor.py           ← movimiento de archivos
+    db/
+      database_manager.py        ← SQLite
+      schema.sql
+    dist/
+      Briner/                    ← exe con consola (setup/debug)
+      BrinerBackground/          ← exe sin consola (servicio en fondo)
+    build_all.bat                ← reconstruir ambos exes
+```
+
+### Instalar dependencias
 
 ```powershell
 cd briner_agent
-python -m pip install -r requirements.txt
-python main.py --setup
-python main.py
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-During setup, choose the folder to organize, the scan interval in seconds, and whether to enable dry-run.
-
-## AI Configuration
-
-Copy the example environment file and add your key:
-
-```powershell
-copy briner_agent\.env.example briner_agent\.env
-```
-
-Edit `.env`:
-
-```text
-GOOGLE_API_KEY=your_google_or_gemini_api_key_here
-```
-
-Do not commit `.env`.
-
-## Common Commands
-
-Run once:
-
-```powershell
-python briner_agent\main.py --once
-```
-
-Simulate without moving files:
-
-```powershell
-python briner_agent\main.py --once --dry-run
-```
-
-Show metrics:
-
-```powershell
-python briner_agent\main.py --metrics
-```
-
-Force setup again:
+### Ejecutar desde código fuente
 
 ```powershell
 python briner_agent\main.py --setup
+python briner_agent\main.py
 ```
 
-## Windows Packaging
+### Reconstruir los ejecutables
 
-See [README_WINDOWS.md](README_WINDOWS.md) for the PyInstaller and auto-start guide.
+```powershell
+briner_agent\build_all.bat
+```
 
-## User Manual
+O manualmente:
 
-See [MANUAL_USO.md](MANUAL_USO.md) for the Spanish usage manual.
+```powershell
+cd briner_agent
+python -m PyInstaller --clean --noconfirm Briner.spec
+python -m PyInstaller --clean --noconfirm BrinerBackground.spec
+```
 
-## Tests
+### Pruebas
 
 ```powershell
 cd briner_agent
 python -m pytest -q
 ```
-

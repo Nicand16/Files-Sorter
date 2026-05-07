@@ -1,25 +1,17 @@
 # Manual de uso de Briner
 
-Briner es una aplicacion para organizar automaticamente archivos nuevos que llegan a una carpeta, normalmente `Descargas`. La configuracion actual esta pensada para Windows y para ejecutarse en segundo plano al iniciar sesion.
+Briner organiza automáticamente los archivos de tu carpeta de Descargas (o cualquier carpeta que elijas). Se ejecuta silenciosamente en segundo plano y revisa la carpeta cada hora.
 
-## Estado actual recomendado
+## Instalación (primera vez)
 
-La instalacion actual queda preparada asi:
+1. Descarga el proyecto de GitHub.
+2. Haz doble clic en **`Install.bat`**.
+3. Escribe la ruta completa de la carpeta que deseas organizar.
+4. ¡Listo! Briner se ejecutará automáticamente al iniciar Windows.
 
-- Carpeta organizada: `C:\Users\tu_usuario\Downloads`
-- Modo de monitoreo: `interval`
-- Frecuencia de escaneo: cada 1 hora (`3600` segundos)
-- Ejecucion en segundo plano: `BrinerBackground.exe`
-- Autoarranque: acceso directo en la carpeta Startup del usuario
-- IA: Gemini mediante variable `GOOGLE_API_KEY` o `GEMINI_API_KEY` en `.env`
+## Carpetas de destino
 
-## Como funciona
-
-Briner no vigila la carpeta en tiempo real por defecto. En vez de eso, despierta cada cierto intervalo, revisa los archivos nuevos que estan directamente dentro de la carpeta configurada y los mueve a la categoria correspondiente.
-
-Por defecto no escanea dentro de las carpetas de destino. Esto evita que vuelva a procesar archivos que ya fueron organizados.
-
-Las carpetas de destino actuales son:
+Briner crea estas subcarpetas dentro de la carpeta que elegiste:
 
 - `1. Universidad y Estudio`
 - `2. Software y Herramientas`
@@ -29,13 +21,17 @@ Las carpetas de destino actuales son:
 - `6. Documentos Personales`
 - `7. Varios`
 
-Los archivos ambiguos se clasifican con IA cuando la API key esta disponible. Si no hay IA, Briner usa reglas locales y envia lo que no pueda decidir a `7. Varios`.
+## Cómo funciona
+
+Briner escanea la carpeta cada hora (modo `interval`). Solo procesa archivos directamente dentro de la carpeta raíz, nunca dentro de las subcarpetas numeradas. Si un archivo ya fue organizado no lo vuelve a mover.
+
+Los archivos se clasifican primero por extensión y palabras clave en el nombre. Si la clasificación es ambigua y hay una API key configurada, se usa Gemini (IA). De lo contrario, el archivo va a `7. Varios`.
 
 ## Uso normal
 
-No necesitas abrir nada manualmente para el uso diario. Al iniciar Windows, Briner se ejecuta en segundo plano y revisa `Descargas` cada hora.
+No necesitas hacer nada. Al iniciar Windows, Briner arranca en segundo plano y revisa tu carpeta cada hora.
 
-Para comprobar que esta corriendo:
+Para verificar que está corriendo:
 
 ```powershell
 Get-Process BrinerBackground -ErrorAction SilentlyContinue
@@ -47,14 +43,14 @@ Para detenerlo temporalmente:
 Get-Process BrinerBackground -ErrorAction SilentlyContinue | Stop-Process
 ```
 
-Se volvera a abrir automaticamente la proxima vez que inicies sesion en Windows.
+Se volverá a iniciar automáticamente la próxima vez que abras Windows.
 
-## Ejecutar manualmente con ventana
+## Diagnóstico con consola
 
-Si quieres ver los mensajes en consola para diagnostico, usa el ejecutable con ventana:
+Para ver los mensajes en tiempo real mientras Briner trabaja:
 
 ```powershell
-cd "C:\ruta\a\Files Sorter\briner_agent\dist\Briner"
+cd briner_agent\dist\Briner
 .\Briner.exe
 ```
 
@@ -70,15 +66,35 @@ Para simular sin mover archivos:
 .\Briner.exe --once --dry-run
 ```
 
-## Cambiar la carpeta organizada o el intervalo
+Para ver métricas:
 
-La configuracion del ejecutable esta en:
-
-```text
-C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\user_settings.json
+```powershell
+.\Briner.exe --metrics
 ```
 
-Para revisar cada hora, debe tener:
+## Cambiar la carpeta monitoreada
+
+Vuelve a ejecutar `Install.bat` o ejecuta:
+
+```powershell
+briner_agent\dist\Briner\Briner.exe --setup
+```
+
+Solo te preguntará la nueva carpeta. Los cambios se aplican de inmediato.
+
+## Archivos de configuración
+
+Todos los archivos de estado se guardan en:
+
+```text
+%APPDATA%\Briner\
+  user_settings.json     ← carpeta y configuración
+  briner.db              ← base de datos de historial
+  logs\
+    briner.log           ← registro de actividad
+```
+
+Para cambiar la carpeta manualmente edita `user_settings.json`:
 
 ```json
 {
@@ -86,173 +102,93 @@ Para revisar cada hora, debe tener:
     "workspace_dir": "C:\\Users\\tu_usuario\\Downloads",
     "mode": "interval",
     "poll_interval": 3600,
-    "dry_run": false,
-    "recursive": false
+    "dry_run": false
   }
 }
 ```
 
-`poll_interval` esta en segundos:
+`poll_interval` es en segundos (`3600` = cada hora, `1800` = cada 30 min).
 
-- `3600`: cada hora
-- `1800`: cada 30 minutos
-- `7200`: cada 2 horas
-
-No se recomienda usar intervalos muy bajos. El minimo aceptado por la app es `10`, pero para uso diario conviene `3600`.
-
-Despues de editar el archivo, reinicia Briner:
+Después de editar, reinicia Briner:
 
 ```powershell
 Get-Process BrinerBackground -ErrorAction SilentlyContinue | Stop-Process
-Start-Process "C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\BrinerBackground.exe"
+Start-Process "briner_agent\dist\BrinerBackground\BrinerBackground.exe" -ArgumentList "--no-wizard"
 ```
 
-## Configurar o actualizar la API key de IA
+## Clasificación con IA (opcional)
 
-El archivo `.env` debe estar junto al ejecutable:
+Crea el archivo:
 
 ```text
-C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\.env
+%APPDATA%\Briner\.env
 ```
 
-Formato correcto:
+Con el contenido:
 
 ```text
 GOOGLE_API_KEY=tu_api_key_aqui
 ```
 
-Tambien se acepta:
+Sin comillas ni espacios alrededor del `=`. Reinicia BrinerBackground para que tome efecto.
 
-```text
-GEMINI_API_KEY=tu_api_key_aqui
-```
-
-No pongas comillas ni espacios antes o despues del signo `=`.
-
-Despues de cambiar la API key, reinicia BrinerBackground para que lea el nuevo valor.
+También puedes poner el `.env` junto a cualquiera de los ejecutables.
 
 ## Ver logs
 
-Los logs del ejecutable de fondo estan en:
-
-```text
-C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\logs\briner.log
-```
-
-Para ver las ultimas lineas:
-
 ```powershell
-Get-Content "C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\logs\briner.log" -Tail 40
+Get-Content "$env:APPDATA\Briner\logs\briner.log" -Tail 40
 ```
 
 Mensajes esperados al iniciar correctamente:
 
 ```text
+Iniciando Briner - Agente Autonomo de Gestion de Archivos
 Modo activo: interval
 Carpeta monitoreada: C:\Users\tu_usuario\Downloads
 Intervalo efectivo: 3600 segundo(s)
-Credenciales IA cargadas desde .env junto a Briner.exe.
-Motor LLM inicializado exitosamente
 ```
 
 ## Autoarranque
 
-Briner se inicia mediante este acceso directo:
+El inicio automático se instala durante la configuración inicial. El acceso directo se encuentra en:
 
 ```text
-C:\Users\tu_usuario\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\Briner File Organizer.lnk
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Briner.lnk
 ```
 
-Debe apuntar a:
+Para quitar el autoarranque, elimina ese acceso directo.
 
-```text
-C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\BrinerBackground.exe
+Para reinstalarlo manualmente:
+
+```powershell
+briner_agent\scripts\install_startup.bat
 ```
 
-Si quieres quitar el autoarranque, elimina ese acceso directo.
+## Reglas de uso
 
-## Modo realtime opcional
+- Coloca los archivos directamente en la carpeta raíz configurada.
+- No pongas archivos nuevos dentro de las carpetas numeradas.
+- Si `dry_run` está en `true`, Briner no mueve archivos, solo simula.
 
-El modo recomendado es `interval`. Solo usa `realtime` si necesitas reaccion instantanea ante cada archivo nuevo.
-
-Para activarlo, cambia `mode` en `user_settings.json`:
-
-```json
-{
-  "monitoring": {
-    "mode": "realtime"
-  }
-}
-```
-
-Luego reinicia Briner. En este modo se usa `watchdog`, por lo que el proceso mantiene vigilancia continua de la carpeta.
-
-## Reglas importantes de uso
-
-- Coloca o descarga archivos directamente en `C:\Users\tu_usuario\Downloads`.
-- No pongas archivos nuevos dentro de las carpetas numeradas si quieres que Briner los clasifique.
-- Las carpetas numeradas son destinos, no entradas de procesamiento.
-- Si un archivo no puede clasificarse con seguridad, puede terminar en `7. Varios`.
-- Si `dry_run` esta en `true`, Briner no movera archivos; solo simulara.
-
-## Solucion de problemas
+## Solución de problemas
 
 ### No mueve archivos
 
-Revisa si hay archivos directamente dentro de `Downloads`. Briner no escanea las carpetas numeradas cuando `recursive` esta en `false`.
-
-Tambien revisa que `dry_run` sea `false`.
+Verifica que haya archivos directamente dentro de tu carpeta (no en subcarpetas numeradas) y que `dry_run` sea `false` en `user_settings.json`.
 
 ### Dice que falta la API key
 
-Verifica que exista este archivo:
-
-```text
-C:\ruta\a\Files Sorter\briner_agent\dist\BrinerBackground\.env
-```
-
-Y que tenga el formato:
-
-```text
-GOOGLE_API_KEY=tu_api_key_aqui
-```
-
-Luego reinicia el proceso.
+Es normal. Briner funciona sin API key usando solo reglas locales. Si quieres IA, crea `%APPDATA%\Briner\.env` con tu `GOOGLE_API_KEY`.
 
 ### Quiero probar sin afectar mis archivos
 
-Usa:
-
 ```powershell
-cd "C:\ruta\a\Files Sorter\briner_agent\dist\Briner"
-.\Briner.exe --once --dry-run
+briner_agent\dist\Briner\Briner.exe --once --dry-run
 ```
 
-### Quiero forzar una organizacion ahora mismo
-
-Usa:
+### Quiero forzar una organización ahora mismo
 
 ```powershell
-cd "C:\ruta\a\Files Sorter\briner_agent\dist\Briner"
-.\Briner.exe --once
+briner_agent\dist\Briner\Briner.exe --once
 ```
-
-### Quiero revisar metricas
-
-Usa:
-
-```powershell
-cd "C:\ruta\a\Files Sorter\briner_agent\dist\Briner"
-.\Briner.exe --metrics
-```
-
-## Archivos principales
-
-- Manual de uso: `MANUAL_USO.md`
-- Guia Windows y empaquetado: `README_WINDOWS.md`
-- Codigo fuente: `briner_agent`
-- Configuracion base: `briner_agent\config.yaml`
-- Configuracion del ejecutable de fondo: `briner_agent\dist\BrinerBackground\user_settings.json`
-- Ejecutable con consola: `briner_agent\dist\Briner\Briner.exe`
-- Ejecutable de fondo: `briner_agent\dist\BrinerBackground\BrinerBackground.exe`
-- Logs de fondo: `briner_agent\dist\BrinerBackground\logs\briner.log`
