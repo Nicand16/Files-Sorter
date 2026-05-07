@@ -6,8 +6,9 @@ Briner organiza automáticamente los archivos de tu carpeta de Descargas (o cual
 
 1. Descarga el proyecto de GitHub.
 2. Haz doble clic en **`Install.bat`**.
-3. Escribe la ruta completa de la carpeta que deseas organizar.
-4. ¡Listo! Briner se ejecutará automáticamente al iniciar Windows.
+3. Selecciona la carpeta que deseas organizar en el diálogo que aparece.
+4. Pega tu API key de Google Gemini cuando se te solicite (gratuita en [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
+5. ¡Listo! Briner se ejecutará automáticamente al iniciar Windows.
 
 ## Carpetas de destino
 
@@ -74,13 +75,15 @@ Para ver métricas:
 
 ## Cambiar la carpeta monitoreada
 
-Vuelve a ejecutar `Install.bat` o ejecuta:
+La forma más sencilla es volver a ejecutar `Install.bat` — pedirá la nueva carpeta y confirmará la API key.
+
+También puedes hacerlo directamente:
 
 ```powershell
-briner_agent\dist\Briner\Briner.exe --setup
+briner_agent\dist\Briner\Briner.exe --setup --watch-dir "C:\nueva\carpeta" --api-key "tu_key"
 ```
 
-Solo te preguntará la nueva carpeta. Los cambios se aplican de inmediato.
+Los cambios se aplican de inmediato.
 
 ## Archivos de configuración
 
@@ -116,23 +119,28 @@ Get-Process BrinerBackground -ErrorAction SilentlyContinue | Stop-Process
 Start-Process "briner_agent\dist\BrinerBackground\BrinerBackground.exe" -ArgumentList "--no-wizard"
 ```
 
-## Clasificación con IA (opcional)
+## Clasificación con IA
 
-Crea el archivo:
+La API key de Gemini se configura automáticamente durante la instalación y se guarda en:
 
 ```text
 %APPDATA%\Briner\.env
 ```
 
-Con el contenido:
+Si necesitas cambiarla, edita ese archivo:
 
 ```text
-GOOGLE_API_KEY=tu_api_key_aqui
+GOOGLE_API_KEY=tu_nueva_api_key
 ```
 
-Sin comillas ni espacios alrededor del `=`. Reinicia BrinerBackground para que tome efecto.
+Sin comillas ni espacios alrededor del `=`. Reinicia BrinerBackground para que tome efecto:
 
-También puedes poner el `.env` junto a cualquiera de los ejecutables.
+```powershell
+Get-Process BrinerBackground -ErrorAction SilentlyContinue | Stop-Process
+Start-Process "briner_agent\dist\BrinerBackground\BrinerBackground.exe" -ArgumentList "--no-wizard"
+```
+
+Sin API key, los archivos ambiguos se mueven a `7. Varios`.
 
 ## Ver logs
 
