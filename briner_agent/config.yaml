@@ -1,0 +1,15 @@
+app:
+  name: "Briner"
+  version: "1.0.0"
+  description: "AI Autonomous Agent for File Management"
+
+monitoring:
+  workspace_dir: "./workspace"
+  poll_interval: 1
+
+database:
+  sqlite_path: "./db/briner.db"
+
+llm:
+  model: "gemini-2.5-flash"
+  temperature: 0.2
