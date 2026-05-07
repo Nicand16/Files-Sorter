@@ -15,6 +15,7 @@ from modules.multimodal_parser import extract_document_content
 from modules.periodic_scanner import scan_directory_once
 from modules.rules_engine import classify_file
 from core.settings_manager import validate_poll_interval, validate_watch_directory
+from db.database_manager import DatabaseManager
 from main import _run_interval_loop
 
 
@@ -59,6 +60,23 @@ class MoveFileTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertTrue(result["dry_run"])
             self.assertTrue(source.exists())
+
+    def test_workspace_mismatch_reports_resolved_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            outside = root / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            source = outside / "file.txt"
+            source.write_text("hello", encoding="utf-8")
+
+            result = move_file_secure(str(source), "Docs", workspace, dry_run=True)
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result["error_code"], "workspace_mismatch")
+            self.assertIn("source_resuelto=", result["message"])
+            self.assertIn("workspace_resuelto=", result["message"])
 
     def test_destination_aliases_use_existing_numbered_folders(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -167,7 +185,7 @@ class IntervalLoopTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     _run_interval_loop(FakeOrchestrator(), FakeDb(), workspace, {}, 3600, once=False)
 
-        self.assertEqual(calls, ["scan", "process", ("sleep", 3600)])
+        self.assertEqual(calls, ["scan", "process", ("sleep", 1)])
 
 
 class ParserTests(unittest.TestCase):
@@ -197,6 +215,35 @@ class SchemaTests(unittest.TestCase):
 
         self.assertIn("files", tables)
         self.assertIn("classification_events", tables)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(files)")}
+        self.assertIn("retry_count", columns)
+
+
+class DatabaseRetryTests(unittest.TestCase):
+    def test_register_file_stops_requeueing_after_three_errors(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "briner.db"
+            db = DatabaseManager(str(db_path))
+            filepath = str((Path(temp_dir) / "file.txt").resolve())
+
+            self.assertTrue(db.register_file("file.txt", filepath, ".txt", 5, 1.0))
+            db.update_file_status(filepath, "error")
+            self.assertTrue(db.register_file("file.txt", filepath, ".txt", 5, 2.0))
+            db.update_file_status(filepath, "error")
+            self.assertTrue(db.register_file("file.txt", filepath, ".txt", 5, 3.0))
+            db.update_file_status(filepath, "error")
+
+            self.assertFalse(db.register_file("file.txt", filepath, ".txt", 5, 4.0))
+
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute("SELECT status, retry_count FROM files WHERE filepath = ?", (filepath,)).fetchone()
+            finally:
+                conn.close()
+
+            self.assertEqual(row["status"], "error")
+            self.assertEqual(row["retry_count"], 3)
 
 
 if __name__ == "__main__":

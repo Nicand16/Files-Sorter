@@ -36,6 +36,7 @@ processing:
   max_workers: 2
   max_files_per_cycle: 500
   llm_batch_size: 50
+  llm_timeout_seconds: 60
   error_retry_seconds: 60
 
 parsing:

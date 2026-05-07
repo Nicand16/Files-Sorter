@@ -1,4 +1,5 @@
 ﻿import logging
+import os
 import shutil
 import threading
 from pathlib import Path
@@ -17,6 +18,19 @@ def _resolve_inside_workspace(path: Path, workspace_root: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _workspace_mismatch_message(source_path, source_resolved: Path, workspace_root, workspace_resolved: Path) -> str:
+    try:
+        common = os.path.commonpath([str(source_resolved), str(workspace_resolved)])
+    except ValueError as exc:
+        common = f"<sin commonpath: {exc}>"
+    return (
+        "Error: El archivo origen esta fuera del workspace. "
+        f"source_original='{source_path}' | source_resuelto='{source_resolved}' | "
+        f"workspace_original='{workspace_root}' | workspace_resuelto='{workspace_resolved}' | "
+        f"commonpath='{common}'"
+    )
 
 
 def normalize_destination(destination_folder_name: str, destination_aliases: dict | None = None) -> str:
@@ -80,21 +94,31 @@ def move_file_secure(
             return {"ok": False, "message": "Error: La ruta origen no es un archivo."}
 
         workspace = Path(workspace_root).resolve()
+        src_resolved = src.resolve()
         if not _resolve_inside_workspace(src, workspace):
-            return {"ok": False, "message": "Error: El archivo origen esta fuera del workspace."}
+            message = _workspace_mismatch_message(source_path, src_resolved, workspace_root, workspace)
+            logger.error(message)
+            return {"ok": False, "error_code": "workspace_mismatch", "message": message}
 
         destination_folder_name = normalize_destination(destination_folder_name, destination_aliases)
         safe_destination = _validate_destination(destination_folder_name)
         dest_dir = (workspace / safe_destination).resolve()
         if not _resolve_inside_workspace(dest_dir, workspace):
-            return {"ok": False, "message": "Error: El destino resuelto sale del workspace."}
+            return {
+                "ok": False,
+                "error_code": "destination_outside_workspace",
+                "message": (
+                    "Error: El destino resuelto sale del workspace. "
+                    f"destino_resuelto='{dest_dir}' | workspace_resuelto='{workspace}'"
+                ),
+            }
 
         dest_path = _unique_destination(dest_dir / src.name)
         if dry_run:
             return {
                 "ok": True,
                 "dry_run": True,
-                "old_path": str(src.resolve()),
+                "old_path": str(src_resolved),
                 "new_path": str(dest_path),
                 "message": f"Dry-run: {src.name} se moveria a {dest_path}",
             }
@@ -105,7 +129,7 @@ def move_file_secure(
         return {
             "ok": True,
             "dry_run": False,
-            "old_path": str(src.resolve()),
+            "old_path": str(src_resolved),
             "new_path": str(dest_path.resolve()),
             "message": f"Exito: Archivo reubicado exitosamente a la ruta {dest_path}",
         }
@@ -117,8 +141,6 @@ def move_file_secure(
 
 
 def _record_thread_move(result: dict):
-    if not result.get("ok"):
-        return
     moves = getattr(_thread_local, "moves", None)
     if moves is None:
         moves = []

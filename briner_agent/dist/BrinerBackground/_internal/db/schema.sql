@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS files (
     extension TEXT,
     size_bytes INTEGER,
     status TEXT DEFAULT 'pending', -- Estados: pending, processed, error
+    retry_count INTEGER NOT NULL DEFAULT 0,
     last_modified TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
