@@ -344,6 +344,7 @@ def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
 
 
 def main():
+    _t0_main = time.perf_counter()
     args = build_arg_parser().parse_args()
     logger.info("Iniciando Briner - Agente Autonomo de Gestion de Archivos")
 
@@ -421,7 +422,9 @@ def main():
     )
 
     if args.metrics:
-        print(json.dumps(db_manager.get_metrics(), indent=2, sort_keys=True))
+        from infra.metrics import metrics
+        combined = {**db_manager.get_metrics(), "runtime_metrics": metrics.snapshot()}
+        print(json.dumps(combined, indent=2, sort_keys=True))
         return
 
     if args.undo_last:
@@ -431,12 +434,16 @@ def main():
         return
 
     from core.agent_orchestrator import BrinerOrchestrator
+    from infra.metrics import M_STARTUP_LATENCY, metrics
 
     orchestrator = BrinerOrchestrator(config=config, db_manager=db_manager, workspace_dir=workspace_dir)
+    _startup_latency = time.perf_counter() - _t0_main
+    metrics.record(M_STARTUP_LATENCY, _startup_latency)
     logger.info("=== Briner configuracion activa ===")
     logger.info("Workspace: %s | Existe: %s", workspace_dir, workspace_dir.exists())
     logger.info("Dry-run: %s | Modo: %s | Recursivo: %s", dry_run, mode, monitoring.get("recursive", False))
-    logger.info("LLM: %s | Agente ReAct: %s", orchestrator.llm is not None, orchestrator.agent is not None)
+    logger.info("LLM: lazy (se inicializara al primer archivo ambiguo)")
+    logger.info("Startup latency (orquestador listo): %.1f ms", _startup_latency * 1000)
     logger.info("===================================")
 
     stop_event = threading.Event()

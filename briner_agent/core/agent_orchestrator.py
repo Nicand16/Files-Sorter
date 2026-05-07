@@ -11,6 +11,20 @@ except ImportError:
     create_react_agent = None
 
 from core.llm_engine import get_llm
+from infra.metrics import (
+    M_CACHE_HITS,
+    M_CACHE_MISSES,
+    M_CYCLE_DURATION,
+    M_FILES_ERRORS,
+    M_FILES_PROCESSED,
+    M_LLM_CALL,
+    M_LLM_CALLS_TOTAL,
+    M_LLM_FAILURES_TOTAL,
+    M_PHASE1_DURATION,
+    M_PHASE2_DURATION,
+    M_PHASE3_DURATION,
+    metrics,
+)
 from modules.crud_executor import consume_thread_moves, move_file_secure
 from modules.rules_engine import build_taxonomy_prompt, classify_file
 
@@ -84,6 +98,7 @@ class BrinerOrchestrator:
             self._tray.set_error(message, notify=notify)
 
     def _record_api_failure(self, message: str):
+        metrics.inc(M_LLM_FAILURES_TOTAL)
         self._consecutive_api_failures += 1
         logger.error(
             "Fallo API LLM consecutivo %s: %s",
@@ -101,10 +116,12 @@ class BrinerOrchestrator:
 
     def _invoke_llm_with_timeout(self, prompt, timeout_seconds: int | None = None):
         timeout = timeout_seconds or self.llm_timeout_seconds
+        metrics.inc(M_LLM_CALLS_TOTAL)
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="BrinerLLMInvoke")
         future = executor.submit(self.llm.invoke, prompt)
         try:
-            return future.result(timeout=timeout)
+            with metrics.span(M_LLM_CALL):
+                return future.result(timeout=timeout)
         except TimeoutError:
             future.cancel()
             message = f"Timeout de LLM despues de {timeout} segundos."
@@ -491,6 +508,10 @@ REGLAS DE OPERACION:
 
     def process_pending_files(self, tray=None, base_processed_total: int = 0, base_errors_total: int = 0):
         """Consulta la BD por archivos pendientes y los procesa en 3 fases."""
+        with metrics.span(M_CYCLE_DURATION):
+            return self._process_pending_files_inner(tray, base_processed_total, base_errors_total)
+
+    def _process_pending_files_inner(self, tray=None, base_processed_total: int = 0, base_errors_total: int = 0):
         pending_files = self.db.get_pending_files(limit=self.max_files_per_cycle)
         result = {"pending": len(pending_files), "processed": 0, "errors": 0, "skipped": 0}
 
@@ -503,25 +524,28 @@ REGLAS DE OPERACION:
 
         # Fase 1: reglas deterministicas — sin API, rapido
         ambiguous = []
-        for file_record in pending_files:
-            filepath = file_record["filepath"]
-            filename = file_record["filename"]
-            if not self._claim_path(filepath):
-                logger.debug("Archivo ya en procesamiento: %s", filename)
-                result["skipped"] += 1
-                continue
-            try:
-                rule_result = self._process_with_rule(filepath, filename, file_record.get("extension"))
-                if rule_result:
-                    result["processed"] += 1
+        with metrics.span(M_PHASE1_DURATION):
+            for file_record in pending_files:
+                filepath = file_record["filepath"]
+                filename = file_record["filename"]
+                if not self._claim_path(filepath):
+                    logger.debug("Archivo ya en procesamiento: %s", filename)
+                    result["skipped"] += 1
+                    continue
+                try:
+                    rule_result = self._process_with_rule(filepath, filename, file_record.get("extension"))
+                    if rule_result:
+                        result["processed"] += 1
+                        metrics.inc(M_FILES_PROCESSED)
+                        self._release_path(filepath)
+                    else:
+                        ambiguous.append(file_record)  # path sigue claimed hasta el lote
+                except Exception as e:
+                    logger.error("Error en regla para %s: %s", filename, e)
+                    self.db.update_file_status(filepath, "error")
                     self._release_path(filepath)
-                else:
-                    ambiguous.append(file_record)  # path sigue claimed hasta el lote
-            except Exception as e:
-                logger.error("Error en regla para %s: %s", filename, e)
-                self.db.update_file_status(filepath, "error")
-                self._release_path(filepath)
-                result["errors"] += 1
+                    result["errors"] += 1
+                    metrics.inc(M_FILES_ERRORS)
 
         self._update_tray_progress(
             tray,
@@ -542,8 +566,11 @@ REGLAS DE OPERACION:
         )
 
         # Fases 2+3: lote LLM con fallback ReAct
+        _phase23_start = __import__("time").perf_counter()
         for i in range(0, len(ambiguous), self.llm_batch_size):
             chunk = ambiguous[i : i + self.llm_batch_size]
+            _chunk_processed_before = result["processed"]
+            _chunk_errors_before = result["errors"]
             self._process_ambiguous_batch(
                 chunk,
                 result,
@@ -551,5 +578,8 @@ REGLAS DE OPERACION:
                 base_processed_total=base_processed_total,
                 base_errors_total=base_errors_total,
             )
+            metrics.inc(M_FILES_PROCESSED, result["processed"] - _chunk_processed_before)
+            metrics.inc(M_FILES_ERRORS, result["errors"] - _chunk_errors_before)
+        metrics.record(M_PHASE2_DURATION, __import__("time").perf_counter() - _phase23_start)
 
         return result
