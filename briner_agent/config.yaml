@@ -35,7 +35,7 @@ rules:
 processing:
   max_workers: 2
   max_files_per_cycle: 500
-  llm_batch_size: 15
+  llm_batch_size: 50
   error_retry_seconds: 60
 
 parsing:

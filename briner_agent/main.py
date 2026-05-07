@@ -354,7 +354,12 @@ def main():
 
     from core.agent_orchestrator import BrinerOrchestrator
 
-    orchestrator = BrinerOrchestrator(config=config, db_manager=db_manager)
+    orchestrator = BrinerOrchestrator(config=config, db_manager=db_manager, workspace_dir=workspace_dir)
+    logger.info("=== Briner configuracion activa ===")
+    logger.info("Workspace: %s | Existe: %s", workspace_dir, workspace_dir.exists())
+    logger.info("Dry-run: %s | Modo: %s | Recursivo: %s", dry_run, mode, monitoring.get("recursive", False))
+    logger.info("LLM: %s | Agente ReAct: %s", orchestrator.llm is not None, orchestrator.agent is not None)
+    logger.info("===================================")
 
     stop_event = threading.Event()
     force_scan_event = threading.Event()

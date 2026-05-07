@@ -26,9 +26,9 @@ def _category_roots(watch_path: Path, config: dict) -> set[Path]:
     for real_root in aliases.values():
         roots.add((watch_path / real_root).resolve())
     for rule in config.get("taxonomy", {}).get("categories", []):
-        category = rule.get("category")
-        if category:
-            roots.add((watch_path / category).resolve())
+        top = rule.get("category", "").split("/")[0]
+        if top and top not in aliases:
+            roots.add((watch_path / top).resolve())
     roots.add((watch_path / "Varios").resolve())
     return roots
 
@@ -54,19 +54,26 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
         return 0
 
     detected = 0
+    skipped_category = 0
+    skipped_ignored = 0
     files = watch_path.rglob("*") if monitoring.get("recursive", False) else watch_path.iterdir()
     for path in files:
         try:
-            if (
-                not path.is_file()
-                or _is_ignored(path, ignored_filenames, ignored_patterns)
-                or _is_inside_any(path, category_roots)
-            ):
+            if not path.is_file():
+                continue
+            if _is_ignored(path, ignored_filenames, ignored_patterns):
+                skipped_ignored += 1
+                continue
+            if _is_inside_any(path, category_roots):
+                skipped_category += 1
                 continue
             if db_manager.register_file(*_file_info(path)):
                 detected += 1
         except OSError as exc:
             logger.warning("No se pudo registrar %s: %s", path, exc)
 
-    logger.info("Escaneo interval detecto %s archivo(s) registrable(s) en %s", detected, watch_path)
+    logger.info(
+        "Escaneo en %s: %s registrados | %s en categorias existentes | %s ignorados",
+        watch_path, detected, skipped_category, skipped_ignored,
+    )
     return detected
