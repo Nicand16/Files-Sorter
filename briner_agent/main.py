@@ -480,11 +480,21 @@ def main():
     tray = None
     try:
         from modules.tray_icon import BrinerTrayIcon
+
+        def _reset_llm():
+            with orchestrator._llm_init_lock:
+                orchestrator._llm_initialized = False
+                orchestrator._llm_obj = None
+                orchestrator.agent = None
+            orchestrator._circuit.record_success()
+            logger.info("LLM reiniciado tras cambio de API key.")
+
         tray = BrinerTrayIcon(
             workspace_dir=workspace_dir,
             appdata_dir=APPDATA_DIR,
             stop_event=stop_event,
             force_scan_event=force_scan_event,
+            on_api_key_changed=_reset_llm,
         )
         orchestrator.set_tray(tray)
     except Exception as exc:

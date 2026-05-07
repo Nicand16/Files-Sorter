@@ -22,11 +22,12 @@ class BrinerTrayIcon:
     _BLUE = (59, 130, 246)
     _RED = (239, 68, 68)
 
-    def __init__(self, workspace_dir: Path, appdata_dir: Path, stop_event: threading.Event, force_scan_event: threading.Event):
+    def __init__(self, workspace_dir: Path, appdata_dir: Path, stop_event: threading.Event, force_scan_event: threading.Event, on_api_key_changed=None):
         self.workspace_dir = Path(workspace_dir)
         self.appdata_dir = Path(appdata_dir)
         self.stop_event = stop_event
         self.force_scan_event = force_scan_event
+        self._on_api_key_changed = on_api_key_changed
         self._icon = None
         self._lock = threading.Lock()
         self._status = "Iniciando..."
@@ -192,6 +193,7 @@ class BrinerTrayIcon:
                 pystray.MenuItem("Ver logs", self._open_logs),
                 pystray.MenuItem("Abrir carpeta monitoreada", self._open_workspace),
                 pystray.MenuItem("Forzar escaneo ahora", self._force_scan),
+                pystray.MenuItem("Cambiar API key...", self._change_api_key),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Detener Briner", self._quit),
             ]
@@ -223,6 +225,41 @@ class BrinerTrayIcon:
 
     def _force_scan(self, icon, item):
         self.force_scan_event.set()
+
+    def _change_api_key(self, icon, item):
+        import subprocess
+        ps_script = (
+            "Add-Type -AssemblyName Microsoft.VisualBasic; "
+            "$key = [Microsoft.VisualBasic.Interaction]::InputBox("
+            "'Pega tu nueva API key de Google Gemini:', "
+            "'Briner - Cambiar API key', ''); "
+            "Write-Output $key"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                capture_output=True, text=True, timeout=60,
+            )
+            new_key = result.stdout.strip()
+        except Exception as exc:
+            logger.warning("Error mostrando dialogo de API key: %s", exc)
+            return
+        if not new_key:
+            return
+        env_path = self.appdata_dir / ".env"
+        try:
+            env_path.write_text(f"GOOGLE_API_KEY={new_key}\n", encoding="utf-8")
+        except Exception as exc:
+            logger.error("No se pudo guardar la API key: %s", exc)
+            return
+        os.environ["GOOGLE_API_KEY"] = new_key
+        if self._on_api_key_changed:
+            try:
+                self._on_api_key_changed()
+            except Exception as exc:
+                logger.warning("Error al reiniciar LLM tras cambio de key: %s", exc)
+        self.clear_error()
+        logger.info("API key actualizada correctamente.")
 
     def _quit(self, icon, item):
         self.stop_event.set()
