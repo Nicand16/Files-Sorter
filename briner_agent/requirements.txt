@@ -1,0 +1,10 @@
+pyyaml
+watchdog
+langchain-core
+langgraph
+langchain-google-genai
+pypdf
+python-docx
+pytest
+pyinstaller
+python-dotenv

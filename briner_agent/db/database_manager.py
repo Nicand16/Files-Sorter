@@ -1,15 +1,15 @@
-import sqlite3
 import logging
+import sqlite3
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+
 class DatabaseManager:
-    """Gestiona la conexión y operaciones CRUD para la base de datos de estado de Briner."""
-    
+    """Gestiona la conexion y operaciones CRUD para la base de datos de Briner."""
+
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
-        # Asegurar que el directorio de la base de datos existe
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_db()
 
@@ -19,7 +19,7 @@ class DatabaseManager:
     def _initialize_db(self):
         schema_path = Path(__file__).parent / "schema.sql"
         if not schema_path.exists():
-            logger.error(f"No se encontró el archivo de esquema en: {schema_path}")
+            logger.error("No se encontro el archivo de esquema en: %s", schema_path)
             return
 
         with open(schema_path, "r", encoding="utf-8") as f:
@@ -28,12 +28,12 @@ class DatabaseManager:
         try:
             with self._get_connection() as conn:
                 conn.executescript(schema_script)
-            logger.info(f"Base de datos inicializada/verificada exitosamente en: {self.db_path.name}")
+            logger.info("Base de datos inicializada/verificada exitosamente en: %s", self.db_path.name)
         except sqlite3.Error as e:
-            logger.error(f"Error al inicializar la base de datos: {e}")
+            logger.error("Error al inicializar la base de datos: %s", e)
 
     def register_file(self, filename: str, filepath: str, extension: str, size_bytes: int, last_modified: float):
-        """Registra un nuevo archivo o actualiza su información y lo marca como 'pending'."""
+        """Registra un archivo o actualiza su informacion y lo marca como pending."""
         query = """
         INSERT INTO files (filename, filepath, extension, size_bytes, last_modified)
         VALUES (?, ?, ?, ?, ?)
@@ -49,7 +49,7 @@ class DatabaseManager:
                 conn.execute(query, (filename, filepath, extension, size_bytes, last_modified))
                 return True
         except sqlite3.Error as e:
-            logger.error(f"Error al registrar archivo {filepath}: {e}")
+            logger.error("Error al registrar archivo %s: %s", filepath, e)
             return False
 
     def remove_file(self, filepath: str):
@@ -60,8 +60,52 @@ class DatabaseManager:
                 conn.execute(query, (filepath,))
                 return True
         except sqlite3.Error as e:
-            logger.error(f"Error al eliminar archivo {filepath}: {e}")
+            logger.error("Error al eliminar archivo %s: %s", filepath, e)
             return False
+
+    def cleanup_missing_or_ignored(self, ignored_filenames: set[str] | None = None):
+        """Elimina de la BD archivos inexistentes o marcadores ignorados."""
+        ignored = ignored_filenames or set()
+        removed = 0
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT filepath, filename FROM files").fetchall()
+                for row in rows:
+                    filepath = row["filepath"]
+                    filename = row["filename"].casefold()
+                    if filename in ignored or not Path(filepath).exists():
+                        conn.execute("DELETE FROM files WHERE filepath = ?", (filepath,))
+                        removed += 1
+            if removed:
+                logger.info("Limpieza de BD: %s registro(s) obsoleto(s) removido(s).", removed)
+            return removed
+        except sqlite3.Error as e:
+            logger.error("Error durante limpieza de BD: %s", e)
+            return 0
+
+    def cleanup_pending_outside_scan_scope(self, workspace_dir: str | Path, recursive: bool):
+        """Elimina pendientes que ya no pertenecen al alcance de escaneo actual."""
+        if recursive:
+            return 0
+
+        workspace = Path(workspace_dir).resolve()
+        removed = 0
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT filepath FROM files WHERE status = 'pending'").fetchall()
+                for row in rows:
+                    path = Path(row["filepath"]).resolve()
+                    if path.parent != workspace:
+                        conn.execute("DELETE FROM files WHERE filepath = ?", (row["filepath"],))
+                        removed += 1
+            if removed:
+                logger.info("Limpieza de alcance: %s pendiente(s) fuera de carpeta raiz removido(s).", removed)
+            return removed
+        except sqlite3.Error as e:
+            logger.error("Error durante limpieza de alcance: %s", e)
+            return 0
 
     def update_file_status(self, filepath: str, status: str):
         """Actualiza el estado de procesamiento del archivo."""
@@ -71,11 +115,27 @@ class DatabaseManager:
                 conn.execute(query, (status, filepath))
                 return True
         except sqlite3.Error as e:
-            logger.error(f"Error al actualizar estado de {filepath}: {e}")
+            logger.error("Error al actualizar estado de %s: %s", filepath, e)
+            return False
+
+    def update_file_path(self, old_path: str, new_path: str, status: str = "processed"):
+        """Actualiza la ruta registrada despues de un movimiento exitoso."""
+        new = Path(new_path)
+        query = """
+        UPDATE files
+        SET filename = ?, filepath = ?, extension = ?, status = ?
+        WHERE filepath = ?
+        """
+        try:
+            with self._get_connection() as conn:
+                conn.execute(query, (new.name, str(new.resolve()), new.suffix, status, old_path))
+                return True
+        except sqlite3.Error as e:
+            logger.error("Error al actualizar ruta %s -> %s: %s", old_path, new_path, e)
             return False
 
     def log_action(self, filepath: str, action_type: str, description: str):
-        """Registra una acción que el agente haya tomado sobre un archivo."""
+        """Registra una accion que el agente haya tomado sobre un archivo."""
         query = """
         INSERT INTO actions_log (file_id, action_type, description)
         SELECT id, ?, ? FROM files WHERE filepath = ?
@@ -85,17 +145,115 @@ class DatabaseManager:
                 conn.execute(query, (action_type, description, filepath))
                 return True
         except sqlite3.Error as e:
-            logger.error(f"Error al registrar acción para el archivo {filepath}: {e}")
+            logger.error("Error al registrar accion para el archivo %s: %s", filepath, e)
             return False
 
-    def get_pending_files(self):
-        """Obtiene la lista de archivos marcados como 'pending'."""
-        query = "SELECT id, filename, filepath, extension FROM files WHERE status = 'pending'"
+    def log_classification_event(
+        self,
+        filepath: str,
+        decision_source: str,
+        action: str,
+        old_path: str | None = None,
+        new_path: str | None = None,
+        category: str | None = None,
+        reason: str | None = None,
+        confidence: float | None = None,
+        dry_run: bool = False,
+    ):
+        """Registra una decision de clasificacion con trazabilidad completa."""
+        query = """
+        INSERT INTO classification_events (
+            file_id,
+            decision_source,
+            action,
+            old_path,
+            new_path,
+            category,
+            reason,
+            confidence,
+            dry_run
+        )
+        SELECT id, ?, ?, ?, ?, ?, ?, ?, ? FROM files WHERE filepath = ?
+        """
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    query,
+                    (
+                        decision_source,
+                        action,
+                        old_path,
+                        new_path,
+                        category,
+                        reason,
+                        confidence,
+                        int(dry_run),
+                        filepath,
+                    ),
+                )
+                return True
+        except sqlite3.Error as e:
+            logger.error("Error al registrar evento de clasificacion para %s: %s", filepath, e)
+            return False
+
+    def get_pending_files(self, limit: int | None = None):
+        """Obtiene la lista de archivos marcados como pending."""
+        query = "SELECT id, filename, filepath, extension FROM files WHERE status = 'pending' ORDER BY id"
+        params = ()
+        if limit:
+            query += " LIMIT ?"
+            params = (limit,)
         try:
             with self._get_connection() as conn:
                 conn.row_factory = sqlite3.Row
-                cursor = conn.execute(query)
+                cursor = conn.execute(query, params)
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logger.error(f"Error al obtener archivos pendientes: {e}")
+            logger.error("Error al obtener archivos pendientes: %s", e)
             return []
+
+    def get_metrics(self):
+        """Retorna metricas basicas de estado y decisiones."""
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                by_status = {
+                    row["status"]: row["count"]
+                    for row in conn.execute("SELECT status, COUNT(*) AS count FROM files GROUP BY status")
+                }
+                by_source = {
+                    row["decision_source"]: row["count"]
+                    for row in conn.execute(
+                        "SELECT decision_source, COUNT(*) AS count FROM classification_events GROUP BY decision_source"
+                    )
+                }
+                return {
+                    "files_by_status": by_status,
+                    "classification_events_by_source": by_source,
+                    "total_files": sum(by_status.values()),
+                    "total_classification_events": sum(by_source.values()),
+                }
+        except sqlite3.Error as e:
+            logger.error("Error al obtener metricas: %s", e)
+            return {}
+
+    def get_last_move_event(self):
+        """Obtiene el ultimo movimiento real registrado para soportar undo."""
+        query = """
+        SELECT id, old_path, new_path
+        FROM classification_events
+        WHERE action = 'move'
+          AND dry_run = 0
+          AND old_path IS NOT NULL
+          AND new_path IS NOT NULL
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+        """
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(query).fetchone()
+                return dict(row) if row else None
+        except sqlite3.Error as e:
+            logger.error("Error al obtener ultimo movimiento: %s", e)
+            return None

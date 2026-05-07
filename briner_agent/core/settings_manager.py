@@ -1,0 +1,133 @@
+import json
+import logging
+import sys
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_MONITORING = {
+    "mode": "interval",
+    "workspace_dir": "./workspace",
+    "poll_interval": 3600,
+    "dry_run": False,
+    "recursive": False,
+}
+
+
+def validate_poll_interval(value) -> int:
+    try:
+        interval = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("poll_interval debe ser un entero.") from exc
+
+    if interval < 10:
+        raise ValueError("poll_interval debe ser mayor o igual a 10 segundos.")
+    return interval
+
+
+def validate_watch_directory(path_value: str | Path) -> str:
+    path = Path(path_value).expanduser()
+    if not path.exists() or not path.is_dir():
+        raise ValueError(f"La carpeta monitoreada no existe o no es directorio: {path}")
+    return str(path.resolve())
+
+
+def normalize_monitoring_config(config: dict) -> dict:
+    monitoring = {**DEFAULT_MONITORING, **config.get("monitoring", {})}
+    mode = str(monitoring.get("mode", "interval")).casefold()
+    if mode not in {"interval", "realtime"}:
+        logger.warning("Modo de monitoreo invalido '%s'. Usando interval.", mode)
+        mode = "interval"
+    monitoring["mode"] = mode
+
+    try:
+        monitoring["poll_interval"] = validate_poll_interval(monitoring.get("poll_interval", 120))
+    except ValueError as exc:
+        logger.warning("%s Usando 3600 segundos.", exc)
+        monitoring["poll_interval"] = 3600
+
+    monitoring["dry_run"] = bool(monitoring.get("dry_run", config.get("app", {}).get("dry_run", False)))
+    config["monitoring"] = monitoring
+    return config
+
+
+def load_user_settings(settings_path: str | Path) -> dict:
+    path = Path(settings_path)
+    if not path.exists():
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8-sig") as file:
+            return json.load(file) or {}
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.error("No se pudo leer settings de usuario en %s: %s", path, exc)
+        return {}
+
+
+def save_user_settings(settings_path: str | Path, settings: dict) -> bool:
+    path = Path(settings_path)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as file:
+            json.dump(settings, file, indent=2, sort_keys=True)
+        return True
+    except OSError as exc:
+        logger.error("No se pudo guardar settings de usuario en %s: %s", path, exc)
+        return False
+
+
+def prompt_for_initial_settings(settings_path: str | Path) -> dict:
+    print("Configuracion inicial de Briner")
+    while True:
+        folder = input("Carpeta a organizar (ej. C:\\Users\\tu_usuario\\Downloads): ").strip().strip('"')
+        try:
+            workspace_dir = validate_watch_directory(folder)
+            break
+        except ValueError as exc:
+            print(exc)
+
+    while True:
+        raw_interval = input("Intervalo de escaneo en segundos (minimo 10, recomendado 3600): ").strip() or "3600"
+        try:
+            poll_interval = validate_poll_interval(raw_interval)
+            break
+        except ValueError as exc:
+            print(exc)
+
+    raw_dry_run = input("Activar dry_run? No mueve archivos, solo simula. [s/N]: ").strip().casefold()
+    dry_run = raw_dry_run in {"s", "si", "y", "yes", "true", "1"}
+
+    settings = {
+        "monitoring": {
+            "mode": "interval",
+            "workspace_dir": workspace_dir,
+            "poll_interval": poll_interval,
+            "dry_run": dry_run,
+        }
+    }
+    save_user_settings(settings_path, settings)
+    return settings
+
+
+def merge_settings(config: dict, user_settings: dict) -> dict:
+    merged = dict(config)
+    for section, values in user_settings.items():
+        if isinstance(values, dict):
+            merged.setdefault(section, {})
+            merged[section].update(values)
+        else:
+            merged[section] = values
+    return normalize_monitoring_config(merged)
+
+
+def load_or_create_user_settings(
+    config: dict,
+    settings_path: str | Path,
+    prompt_if_missing: bool = True,
+) -> dict:
+    user_settings = load_user_settings(settings_path)
+    if not user_settings and prompt_if_missing:
+        if sys.stdin and sys.stdin.isatty():
+            user_settings = prompt_for_initial_settings(settings_path)
+        else:
+            logger.warning("Settings de usuario no encontrados y no hay consola interactiva. Usando defaults seguros.")
+    return merge_settings(config, user_settings)

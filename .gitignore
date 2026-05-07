@@ -1,0 +1,31 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+**/.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime settings and logs
+briner_agent/user_settings.json
+briner_agent/logs/
+briner_agent/**/logs/
+
+# Local databases and runtime state
+briner_agent/db/*.db
+briner_agent/**/*.db
+
+# PyInstaller outputs
+briner_agent/build/
+briner_agent/dist/
+
+# Local files organized during development
+briner_agent/workspace/*
+!briner_agent/workspace/.keep
+
+# OS/editor noise
+Thumbs.db
+desktop.ini
+.DS_Store

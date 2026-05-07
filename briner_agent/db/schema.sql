@@ -20,3 +20,19 @@ CREATE TABLE IF NOT EXISTS actions_log (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
 );
+
+-- Registro detallado de decisiones de clasificacion y movimientos propuestos/ejecutados
+CREATE TABLE IF NOT EXISTS classification_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER,
+    decision_source TEXT NOT NULL, -- rule|llm|system
+    action TEXT NOT NULL,
+    old_path TEXT,
+    new_path TEXT,
+    category TEXT,
+    reason TEXT,
+    confidence REAL,
+    dry_run INTEGER DEFAULT 0,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
+);
