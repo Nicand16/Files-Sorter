@@ -23,6 +23,20 @@ if not exist "%BRINER_EXE%" (
     exit /b 1
 )
 
+:: Verificar integridad minima del bundle
+if not exist "%ROOT%briner_agent\dist\Briner\_internal\python314.dll" (
+    echo  ERROR: Archivos internos faltantes (_internal\python314.dll).
+    echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
+    pause
+    exit /b 1
+)
+if not exist "%ROOT%briner_agent\dist\Briner\_internal\_socket.pyd" (
+    echo  ERROR: Archivo _socket.pyd faltante.
+    echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
+    pause
+    exit /b 1
+)
+
 echo  Se abrira el asistente de configuracion...
 echo  Solo necesitaras indicar la carpeta que deseas organizar.
 echo.
