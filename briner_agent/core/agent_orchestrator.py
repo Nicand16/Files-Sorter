@@ -87,8 +87,32 @@ class BrinerOrchestrator:
         self._active_paths_lock = threading.Lock()
         self._tray = None
         self._consecutive_api_failures = 0
-        self.llm = get_llm(config)
-        self.agent = self._initialize_agent()
+        # Lazy LLM init: do NOT call get_llm() at construction time
+        self._llm_obj = None
+        self._llm_initialized = False
+        self._llm_init_lock = threading.Lock()
+        self.agent = None  # set lazily when LLM first initializes
+        # Circuit breaker replaces the bare consecutive-failures counter
+        from runtime.circuit_breaker import CircuitBreaker
+        cb_threshold = int(config.get("processing", {}).get("circuit_breaker_threshold", 3))
+        cb_recovery = float(config.get("processing", {}).get("circuit_breaker_recovery_seconds", 60.0))
+        self._circuit = CircuitBreaker("gemini", cb_threshold, cb_recovery)
+
+    @property
+    def llm(self):
+        if self._llm_initialized:
+            return self._llm_obj
+        with self._llm_init_lock:
+            if not self._llm_initialized:
+                logger.info("Inicializando LLM (primer uso)...")
+                self._llm_obj = get_llm(self.config)
+                self._llm_initialized = True
+                if self._llm_obj:
+                    logger.info("LLM inicializado correctamente.")
+                    self.agent = self._initialize_agent()
+                else:
+                    logger.warning("LLM no disponible (API key ausente o error de init).")
+        return self._llm_obj
 
     def set_tray(self, tray):
         self._tray = tray
@@ -104,21 +128,21 @@ class BrinerOrchestrator:
     def _record_api_failure(self, message: str):
         metrics.inc(M_LLM_FAILURES_TOTAL)
         self._consecutive_api_failures += 1
-        logger.error(
-            "Fallo API LLM consecutivo %s: %s",
-            self._consecutive_api_failures,
-            message,
-        )
-        if self._consecutive_api_failures == 3:
+        self._circuit.record_failure(message)
+        from runtime.circuit_breaker import CircuitState
+        if self._circuit.state == CircuitState.OPEN:
             self._notify_error(
-                f"Gemini fallo {self._consecutive_api_failures} veces seguidas. Ultimo error: {message}",
+                f"Gemini circuit ABIERTO tras {self._consecutive_api_failures} fallo(s). Ultimo: {message}",
                 notify=True,
             )
 
     def _record_api_success(self):
         self._consecutive_api_failures = 0
+        self._circuit.record_success()
 
     def _invoke_llm_with_timeout(self, prompt, timeout_seconds: int | None = None):
+        from runtime.circuit_breaker import CircuitOpenError
+        self._circuit.before_call()  # raises CircuitOpenError if OPEN
         timeout = timeout_seconds or self.llm_timeout_seconds
         metrics.inc(M_LLM_CALLS_TOTAL)
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="BrinerLLMInvoke")
@@ -319,8 +343,12 @@ REGLAS DE OPERACION:
             logger.error("Timeout en clasificacion por lote: %s", e)
             return None
         except Exception as e:
-            logger.error("Error en clasificacion por lote: %s", e)
-            self._record_api_failure(str(e))
+            from runtime.circuit_breaker import CircuitOpenError
+            if isinstance(e, CircuitOpenError):
+                logger.warning("Batch LLM saltado (circuit ABIERTO): %s", e)
+            else:
+                logger.error("Error en clasificacion por lote: %s", e)
+                self._record_api_failure(str(e))
             return None
 
     # ------------------------------------------------------------------ #
@@ -374,8 +402,17 @@ REGLAS DE OPERACION:
             self._emit(FileState.ERROR, filepath, filename, reason=str(e))
             return "error"
         except Exception as e:
-            logger.error("Error en agente ReAct para %s: %s", filename, e)
-            self._record_api_failure(str(e))
+            from runtime.circuit_breaker import CircuitOpenError
+            if isinstance(e, CircuitOpenError):
+                logger.warning("ReAct saltado (circuit ABIERTO): %s — moviendo a Varios.", e)
+                try:
+                    self._apply_move(filepath, "Varios", "system", f"Circuit abierto: {e}")
+                    return "processed"
+                except Exception as e2:
+                    logger.error("Fallback a Varios fallo para %s: %s", filename, e2)
+            else:
+                logger.error("Error en agente ReAct para %s: %s", filename, e)
+                self._record_api_failure(str(e))
             self.db.update_file_status(filepath, "error")
             self._emit(FileState.ERROR, filepath, filename, reason=str(e))
             return "error"

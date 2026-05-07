@@ -321,16 +321,11 @@ def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
 
     has_api_key = bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
     if not has_api_key:
-        errors.append("Falta GOOGLE_API_KEY/GEMINI_API_KEY en el entorno o .env.")
-    elif not orchestrator.llm:
-        errors.append("La API key existe, pero el motor LLM no pudo inicializarse.")
-    else:
-        try:
-            response = orchestrator._invoke_llm_with_timeout("Responde exactamente: OK", timeout_seconds=60)
-            logger.info("Verificacion LLM de arranque OK: %.80s", getattr(response, "content", ""))
-            orchestrator._record_api_success()
-        except Exception as exc:
-            errors.append(f"No hay conexion funcional con Gemini al arrancar: {exc}")
+        logger.warning(
+            "Falta GOOGLE_API_KEY/GEMINI_API_KEY. LLM se inicializara al primer archivo ambiguo."
+        )
+        if tray and hasattr(tray, "set_error"):
+            tray.set_error("Falta API key de Gemini. Configura GOOGLE_API_KEY en .env", notify=False)
 
     if errors:
         message = " | ".join(errors)
@@ -339,7 +334,7 @@ def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
             tray.set_error(message, notify=True)
         return False
 
-    logger.info("Verificacion de arranque completada correctamente.")
+    logger.info("Verificacion de arranque completada. LLM: lazy (primer archivo ambiguo).")
     return True
 
 

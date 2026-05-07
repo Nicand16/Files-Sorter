@@ -38,6 +38,10 @@ processing:
   llm_batch_size: 50
   llm_timeout_seconds: 60
   error_retry_seconds: 60
+  circuit_breaker_threshold: 3
+  circuit_breaker_recovery_seconds: 60
+  decision_cache_size: 200
+  decision_cache_ttl_seconds: 3600
 
 parsing:
   max_chars: 3000
