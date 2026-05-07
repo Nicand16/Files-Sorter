@@ -9,24 +9,24 @@ echo  =====================================================
 echo.
 
 set "ROOT=%~dp0"
-set "BRINER_EXE=%ROOT%briner_agent\dist\Briner\Briner.exe"
-set "BRINER_BG_EXE=%ROOT%briner_agent\dist\BrinerBackground\BrinerBackground.exe"
-set "BRINER_MON_EXE=%ROOT%briner_agent\dist\BrinerMonitor\BrinerMonitor.exe"
+set "BRINER_EXE=%ROOT%Briner\Briner.exe"
+set "BRINER_BG_EXE=%ROOT%BrinerBackground\BrinerBackground.exe"
+set "BRINER_MON_EXE=%ROOT%BrinerMonitor\BrinerMonitor.exe"
 
 :: --- Verificar archivos necesarios ---
 if not exist "%BRINER_EXE%" (
     echo  ERROR: No se encontro Briner.exe en:
     echo    %BRINER_EXE%
     echo.
-    echo  Asegurate de ejecutar este archivo desde la carpeta del proyecto.
-    echo  Si descargaste el proyecto de GitHub, verifica que exista:
-    echo    briner_agent\dist\Briner\Briner.exe
+    echo  Asegurate de que Install.bat este en la misma carpeta que las carpetas Briner,
+    echo  BrinerBackground y BrinerMonitor.
+    echo  Si descargaste el zip de GitHub, extrae todo antes de ejecutar Install.bat.
     echo.
     pause
     exit /b 1
 )
 
-if not exist "%ROOT%briner_agent\dist\Briner\_internal\python314.dll" (
+if not exist "%ROOT%Briner\_internal\python314.dll" (
     echo  ERROR: Archivos internos faltantes ^(_internal\python314.dll^).
     echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
     echo.
@@ -34,7 +34,7 @@ if not exist "%ROOT%briner_agent\dist\Briner\_internal\python314.dll" (
     exit /b 1
 )
 
-if not exist "%ROOT%briner_agent\dist\Briner\_internal\_socket.pyd" (
+if not exist "%ROOT%Briner\_internal\_socket.pyd" (
     echo  ERROR: Archivo _socket.pyd faltante.
     echo  La descarga parece incompleta. Descarga el repositorio de nuevo.
     echo.
