@@ -1,15 +1,29 @@
+<<<<<<< HEAD
 import logging
 import sqlite3
+=======
+import sqlite3
+import logging
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+<<<<<<< HEAD
 
 class DatabaseManager:
     """Gestiona la conexion y operaciones CRUD para la base de datos de Briner."""
 
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)
+=======
+class DatabaseManager:
+    """Gestiona la conexión y operaciones CRUD para la base de datos de estado de Briner."""
+    
+    def __init__(self, db_path: str):
+        self.db_path = Path(db_path)
+        # Asegurar que el directorio de la base de datos existe
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_db()
 
@@ -19,7 +33,11 @@ class DatabaseManager:
     def _initialize_db(self):
         schema_path = Path(__file__).parent / "schema.sql"
         if not schema_path.exists():
+<<<<<<< HEAD
             logger.error("No se encontro el archivo de esquema en: %s", schema_path)
+=======
+            logger.error(f"No se encontró el archivo de esquema en: {schema_path}")
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
             return
 
         with open(schema_path, "r", encoding="utf-8") as f:
@@ -28,12 +46,21 @@ class DatabaseManager:
         try:
             with self._get_connection() as conn:
                 conn.executescript(schema_script)
+<<<<<<< HEAD
             logger.info("Base de datos inicializada/verificada exitosamente en: %s", self.db_path.name)
         except sqlite3.Error as e:
             logger.error("Error al inicializar la base de datos: %s", e)
 
     def register_file(self, filename: str, filepath: str, extension: str, size_bytes: int, last_modified: float):
         """Registra un archivo o actualiza su informacion y lo marca como pending."""
+=======
+            logger.info(f"Base de datos inicializada/verificada exitosamente en: {self.db_path.name}")
+        except sqlite3.Error as e:
+            logger.error(f"Error al inicializar la base de datos: {e}")
+
+    def register_file(self, filename: str, filepath: str, extension: str, size_bytes: int, last_modified: float):
+        """Registra un nuevo archivo o actualiza su información y lo marca como 'pending'."""
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
         query = """
         INSERT INTO files (filename, filepath, extension, size_bytes, last_modified)
         VALUES (?, ?, ?, ?, ?)
@@ -49,7 +76,11 @@ class DatabaseManager:
                 conn.execute(query, (filename, filepath, extension, size_bytes, last_modified))
                 return True
         except sqlite3.Error as e:
+<<<<<<< HEAD
             logger.error("Error al registrar archivo %s: %s", filepath, e)
+=======
+            logger.error(f"Error al registrar archivo {filepath}: {e}")
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
             return False
 
     def remove_file(self, filepath: str):
@@ -60,6 +91,7 @@ class DatabaseManager:
                 conn.execute(query, (filepath,))
                 return True
         except sqlite3.Error as e:
+<<<<<<< HEAD
             logger.error("Error al eliminar archivo %s: %s", filepath, e)
             return False
 
@@ -107,6 +139,11 @@ class DatabaseManager:
             logger.error("Error durante limpieza de alcance: %s", e)
             return 0
 
+=======
+            logger.error(f"Error al eliminar archivo {filepath}: {e}")
+            return False
+
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
     def update_file_status(self, filepath: str, status: str):
         """Actualiza el estado de procesamiento del archivo."""
         query = "UPDATE files SET status = ? WHERE filepath = ?"
@@ -115,6 +152,7 @@ class DatabaseManager:
                 conn.execute(query, (status, filepath))
                 return True
         except sqlite3.Error as e:
+<<<<<<< HEAD
             logger.error("Error al actualizar estado de %s: %s", filepath, e)
             return False
 
@@ -136,6 +174,13 @@ class DatabaseManager:
 
     def log_action(self, filepath: str, action_type: str, description: str):
         """Registra una accion que el agente haya tomado sobre un archivo."""
+=======
+            logger.error(f"Error al actualizar estado de {filepath}: {e}")
+            return False
+
+    def log_action(self, filepath: str, action_type: str, description: str):
+        """Registra una acción que el agente haya tomado sobre un archivo."""
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
         query = """
         INSERT INTO actions_log (file_id, action_type, description)
         SELECT id, ?, ? FROM files WHERE filepath = ?
@@ -145,6 +190,7 @@ class DatabaseManager:
                 conn.execute(query, (action_type, description, filepath))
                 return True
         except sqlite3.Error as e:
+<<<<<<< HEAD
             logger.error("Error al registrar accion para el archivo %s: %s", filepath, e)
             return False
 
@@ -257,3 +303,19 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error("Error al obtener ultimo movimiento: %s", e)
             return None
+=======
+            logger.error(f"Error al registrar acción para el archivo {filepath}: {e}")
+            return False
+
+    def get_pending_files(self):
+        """Obtiene la lista de archivos marcados como 'pending'."""
+        query = "SELECT id, filename, filepath, extension FROM files WHERE status = 'pending'"
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute(query)
+                return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            logger.error(f"Error al obtener archivos pendientes: {e}")
+            return []
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43

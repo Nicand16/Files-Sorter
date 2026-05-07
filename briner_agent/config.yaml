@@ -4,6 +4,7 @@ app:
   description: "AI Autonomous Agent for File Management"
 
 monitoring:
+<<<<<<< HEAD
   mode: "interval"
   workspace_dir: "./workspace"
   poll_interval: 3600
@@ -21,6 +22,10 @@ monitoring:
     "Trabajo y Empleo": "5. Trabajo y Empleo"
     "Documentos Personales": "6. Documentos Personales"
     "Varios": "7. Varios"
+=======
+  workspace_dir: "./workspace"
+  poll_interval: 1
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
 
 database:
   sqlite_path: "./db/briner.db"
@@ -28,6 +33,7 @@ database:
 llm:
   model: "gemini-2.5-flash"
   temperature: 0.2
+<<<<<<< HEAD
 
 rules:
   fallback_documents_to_varios: false
@@ -72,3 +78,5 @@ taxonomy:
       extensions: [".exe", ".msi"]
     - category: "Software y Herramientas/Comprimidos y Portables"
       extensions: [".zip", ".rar", ".7z"]
+=======
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43

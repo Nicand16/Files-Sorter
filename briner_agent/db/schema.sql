@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS actions_log (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
 );
+<<<<<<< HEAD
 
 -- Registro detallado de decisiones de clasificacion y movimientos propuestos/ejecutados
 CREATE TABLE IF NOT EXISTS classification_events (
@@ -36,3 +37,5 @@ CREATE TABLE IF NOT EXISTS classification_events (
     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE SET NULL
 );
+=======
+>>>>>>> c99e90658353d10d9e83ae9765273f8409660b43
