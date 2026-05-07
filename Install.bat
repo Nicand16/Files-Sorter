@@ -107,9 +107,13 @@ if "!GEMINI_KEY!"=="" (
 )
 echo.
 
+:: --- Guardar API key en APPDATA\Briner\.env ---
+if not exist "%APPDATA%\Briner" mkdir "%APPDATA%\Briner"
+echo GOOGLE_API_KEY=!GEMINI_KEY!> "%APPDATA%\Briner\.env"
+
 :: --- Configurar Briner ---
 echo  Configurando Briner...
-"%BRINER_EXE%" --setup --watch-dir "!WATCH_DIR!" --api-key "!GEMINI_KEY!"
+"%BRINER_EXE%" --setup --watch-dir "!WATCH_DIR!"
 set "SETUP_ERR=!ERRORLEVEL!"
 
 if !SETUP_ERR! neq 0 (
