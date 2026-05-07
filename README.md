@@ -6,8 +6,9 @@ Briner organiza automáticamente los archivos de una carpeta (por ejemplo, `Desc
 
 1. Descarga o clona este repositorio.
 2. Haz doble clic en **`Install.bat`**.
-3. Escribe la ruta de la carpeta que deseas organizar (ej. `C:\Users\tu_usuario\Downloads`).
-4. ¡Listo! Briner se ejecutará automáticamente cada vez que inicies Windows.
+3. Selecciona la carpeta que deseas organizar en el diálogo que aparece.
+4. Pega tu API key de Google Gemini cuando se te solicite (gratuita en [aistudio.google.com/apikey](https://aistudio.google.com/apikey)).
+5. ¡Listo! Briner se ejecutará automáticamente cada vez que inicies Windows.
 
 No se requiere instalar Python ni ninguna dependencia adicional.
 
@@ -25,15 +26,17 @@ Los archivos se organizan en estas subcarpetas dentro de la carpeta elegida:
 | `6. Documentos Personales` | Cédula, facturas, certificados |
 | `7. Varios` | Todo lo que no encaja en otra categoría |
 
-## Clasificación con IA (opcional)
+## Clasificación con IA
 
-Para que archivos ambiguos sean clasificados con inteligencia artificial (Gemini), crea un archivo `.env` en `%APPDATA%\Briner\` con tu API key:
+La API key de Gemini se configura automáticamente durante la instalación. Briner la guarda en `%APPDATA%\Briner\.env`.
+
+Si necesitas cambiarla manualmente, edita ese archivo:
 
 ```text
-GOOGLE_API_KEY=tu_api_key_aqui
+GOOGLE_API_KEY=tu_nueva_api_key
 ```
 
-Sin API key, Briner funciona igual usando solo reglas locales por extensión y palabras clave.
+Sin API key, Briner funciona usando solo reglas locales por extensión y palabras clave (archivos ambiguos van a `7. Varios`).
 
 ## Comandos útiles (con consola)
 
@@ -54,8 +57,8 @@ cd briner_agent\dist\Briner
 # Ver métricas
 .\Briner.exe --metrics
 
-# Reconfigurar carpeta (vuelve a pedir solo la carpeta)
-.\Briner.exe --setup
+# Reconfigurar carpeta y API key (o vuelve a ejecutar Install.bat)
+.\Briner.exe --setup --watch-dir "C:\nueva\carpeta" --api-key "tu_key"
 ```
 
 ## Logs
