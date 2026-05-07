@@ -1,4 +1,4 @@
-﻿import argparse
+import argparse
 import json
 import logging
 import os
@@ -15,8 +15,29 @@ CODE_DIR = Path(__file__).resolve().parent
 IS_FROZEN = getattr(sys, "frozen", False)
 APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else CODE_DIR
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", CODE_DIR)).resolve()
-# State files (settings, db, logs) go to APPDATA when frozen so both exes share them.
-APPDATA_DIR = Path(os.environ.get("APPDATA", Path.home())) / "Briner" if IS_FROZEN else CODE_DIR
+
+
+def get_briner_data_dir(*, is_frozen: bool, home: Path | None = None) -> Path:
+    """Return a writable app-data directory for Briner on any OS."""
+    home_dir = Path.home() if home is None else Path(home)
+    override = os.environ.get("BRINER_HOME")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    if is_frozen:
+        appdata = os.environ.get("APPDATA")
+        if appdata:
+            return (Path(appdata) / "Briner").resolve()
+        xdg_data = os.environ.get("XDG_DATA_HOME")
+        if xdg_data:
+            return (Path(xdg_data) / "Briner").resolve()
+        return (home_dir / ".local" / "share" / "Briner").resolve()
+
+    return CODE_DIR
+
+
+# State files (settings, db, logs) go to per-user app data when frozen so both exes share them.
+APPDATA_DIR = get_briner_data_dir(is_frozen=IS_FROZEN)
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 

@@ -16,7 +16,7 @@ from modules.periodic_scanner import scan_directory_once
 from modules.rules_engine import classify_file
 from core.settings_manager import validate_poll_interval, validate_watch_directory
 from db.database_manager import DatabaseManager
-from main import _run_interval_loop
+from main import _run_interval_loop, get_briner_data_dir
 
 
 class RulesEngineTests(unittest.TestCase):
@@ -111,6 +111,19 @@ class SettingsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_watch_directory(missing)
 
+
+
+    def test_get_briner_data_dir_uses_xdg_when_frozen_without_appdata(self):
+        with patch.dict("main.os.environ", {"XDG_DATA_HOME": "/tmp/xdg"}, clear=True):
+            data_dir = get_briner_data_dir(is_frozen=True, home=Path("/home/tester"))
+
+        self.assertEqual(data_dir, Path("/tmp/xdg/Briner").resolve())
+
+    def test_get_briner_data_dir_honors_override(self):
+        with patch.dict("main.os.environ", {"BRINER_HOME": "~/custom_briner"}, clear=True):
+            data_dir = get_briner_data_dir(is_frozen=True, home=Path("/home/tester"))
+
+        self.assertEqual(data_dir, Path("~/custom_briner").expanduser().resolve())
 
 class FakeDb:
     def __init__(self):
