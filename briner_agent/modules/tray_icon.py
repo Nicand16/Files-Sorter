@@ -3,6 +3,8 @@ import os
 import threading
 from pathlib import Path
 
+from runtime.event_bus import FileEvent, FileState, bus
+
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +36,9 @@ class BrinerTrayIcon:
         self._last_cycle = "-"
         self.last_error_message = ""
         self._pending_notifications: list[tuple[str, str]] = []
+        self._recent_file_events: list[FileEvent] = []
+        self._max_recent_events: int = 5
+        bus.subscribe(self._on_file_event)
 
     def update_stats(
         self,
@@ -67,6 +72,13 @@ class BrinerTrayIcon:
                 self._color = self._BLUE
             else:
                 self._color = self._GREEN
+        self._refresh_icon()
+
+    def _on_file_event(self, event: FileEvent):
+        with self._lock:
+            self._recent_file_events = [e for e in self._recent_file_events if e.filepath != event.filepath]
+            self._recent_file_events.insert(0, event)
+            self._recent_file_events = self._recent_file_events[:self._max_recent_events]
         self._refresh_icon()
 
     def set_error(self, message: str, notify: bool = True):
@@ -133,6 +145,7 @@ class BrinerTrayIcon:
             errors_total = self._errors_total
             last_cycle = self._last_cycle
             error_message = self.last_error_message
+            recent = list(self._recent_file_events)
 
         items = [
             pystray.MenuItem(f"Briner - {status}", None, enabled=False),
@@ -151,6 +164,28 @@ class BrinerTrayIcon:
                 pystray.MenuItem(f"Procesados total: {processed_total}", None, enabled=False),
                 pystray.MenuItem(f"Errores total: {errors_total}", None, enabled=False),
                 pystray.MenuItem(f"Ultimo ciclo: {last_cycle}", None, enabled=False),
+            ]
+        )
+
+        if recent:
+            _state_icon = {
+                FileState.DETECTED:   "?",
+                FileState.QUEUED:     "o",
+                FileState.PROCESSING: "*",
+                FileState.CLASSIFIED: "+",
+                FileState.MOVED:      ">",
+                FileState.IGNORED:    "-",
+                FileState.ERROR:      "!",
+            }
+            items.append(pystray.Menu.SEPARATOR)
+            items.append(pystray.MenuItem("Recientes:", None, enabled=False))
+            for ev in recent:
+                icon_char = _state_icon.get(ev.state, ".")
+                label = f"  [{icon_char}] {ev.short_label()}"[:80]
+                items.append(pystray.MenuItem(label, None, enabled=False))
+
+        items.extend(
+            [
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Ver logs", self._open_logs),
                 pystray.MenuItem("Abrir carpeta monitoreada", self._open_workspace),
@@ -202,6 +237,7 @@ class BrinerTrayIcon:
             logger.warning("No se pudo iniciar el icono de bandeja del sistema: %s", exc)
 
     def stop(self):
+        bus.unsubscribe(self._on_file_event)
         if self._icon:
             try:
                 self._icon.stop()
