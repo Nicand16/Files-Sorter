@@ -123,6 +123,7 @@ class BrinerMonitorApp:
         tk.Button(btn_frame, text="⚡ Forzar escaneo", command=self._force_scan).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="↺ Actualizar ahora", command=self._refresh).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="Abrir logs", command=self._open_logs).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="🔑 Cambiar API key", command=self._change_api_key).pack(side=tk.LEFT, padx=4)
 
         ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X)
 
@@ -212,6 +213,35 @@ class BrinerMonitorApp:
             self._status_label.config(text="Escaneo solicitado — Briner procesará en breve")
         except Exception as exc:
             tkinter.messagebox.showerror("Briner Monitor", f"No se pudo solicitar escaneo:\n{exc}")
+
+    def _change_api_key(self):
+        import subprocess
+        ps_script = (
+            "Add-Type -AssemblyName Microsoft.VisualBasic; "
+            "$key = [Microsoft.VisualBasic.Interaction]::InputBox("
+            "'Pega tu nueva API key de Google Gemini:', "
+            "'Briner Monitor - Cambiar API key', ''); "
+            "Write-Output $key"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                capture_output=True, text=True, timeout=60,
+            )
+            new_key = result.stdout.strip()
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo mostrar el dialogo:\n{exc}")
+            return
+        if not new_key:
+            return
+        env_path = _briner_dir / ".env"
+        try:
+            env_path.write_text(f"GOOGLE_API_KEY={new_key}\n", encoding="utf-8")
+            self._status_label.config(
+                text="API key guardada. Se aplicara en el proximo ciclo o usa bandeja -> Cambiar API key."
+            )
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo guardar la API key:\n{exc}")
 
     def _open_logs(self):
         if LOGS_DIR.exists():

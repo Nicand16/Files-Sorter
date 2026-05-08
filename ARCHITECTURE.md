@@ -148,7 +148,7 @@ La configuración se construye en dos capas que se fusionan:
 
 ### Capa 1: `config.yaml` (base, inmutable para el usuario)
 Empaquetado dentro del exe por PyInstaller (`datas=[('config.yaml', '.')]`). Contiene:
-- **`monitoring`**: `mode`, `poll_interval`, `recursive`, `ignored_patterns`, `destination_aliases` (mapeo de categoría a nombre de carpeta con número).
+- **`monitoring`**: `mode`, `poll_interval`, `recursive: false` (solo archivos en la raíz de la carpeta configurada, no en subcarpetas), `ignored_patterns`, `destination_aliases` (mapeo de categoría a nombre de carpeta con número).
 - **`processing`**: `max_files_per_cycle` (500), `llm_batch_size` (50), `llm_timeout_seconds` (60), `circuit_breaker_threshold` (3), `circuit_breaker_recovery_seconds` (60), `decision_cache_size` (200), `decision_cache_ttl_seconds` (3600).
 - **`taxonomy`**: lista de reglas deterministas (categoría + extensiones / palabras clave).
 - **`llm`**: `model` (`gemini-2.5-flash`), `temperature` (0.2).

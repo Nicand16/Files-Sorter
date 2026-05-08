@@ -132,20 +132,23 @@ class DirectoryMonitor:
 
     def __init__(self, watch_directory: str, db_manager, config: dict | None = None):
         self.watch_directory = Path(watch_directory)
+        self.config = config or {}
+        self.recursive = self.config.get("monitoring", {}).get("recursive", False)
         self.observer = Observer()
         self.event_handler = BrinerEventHandler(db_manager, self.watch_directory, config)
 
     def scan_existing_files(self):
         self.watch_directory.mkdir(parents=True, exist_ok=True)
-        for path in self.watch_directory.rglob("*"):
+        files = self.watch_directory.rglob("*") if self.recursive else self.watch_directory.iterdir()
+        for path in files:
             if path.is_file():
                 self.event_handler.register_existing_file(path)
 
     def start(self):
         self.watch_directory.mkdir(parents=True, exist_ok=True)
-        self.observer.schedule(self.event_handler, str(self.watch_directory.absolute()), recursive=True)
+        self.observer.schedule(self.event_handler, str(self.watch_directory.absolute()), recursive=self.recursive)
         self.observer.start()
-        logger.info("Monitorizacion en tiempo real iniciada en: %s", self.watch_directory.absolute())
+        logger.info("Monitorizacion en tiempo real iniciada en: %s (recursive=%s)", self.watch_directory.absolute(), self.recursive)
 
     def stop(self):
         logger.info("Deteniendo monitorizacion de archivos...")

@@ -8,7 +8,7 @@ monitoring:
   workspace_dir: "./workspace"
   poll_interval: 3600
   dry_run: false
-  recursive: true
+  recursive: false
   debounce_seconds: 2
   ignore_existing_categories: true
   ignored_filenames: [".keep", "desktop.ini"]
