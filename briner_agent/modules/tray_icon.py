@@ -118,6 +118,7 @@ class BrinerTrayIcon:
                 pass
 
     def _notify(self, title: str, message: str):
+        message = message[:255]  # pystray limit is 256 chars
         if self._icon:
             try:
                 self._icon.notify(message, title)

@@ -40,6 +40,14 @@ _BATCH_READABLE_EXTENSIONS = {
 _BATCH_CONTENT_MAX_CHARS = 300
 
 
+def _is_api_key_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(kw in msg for kw in (
+        "api_key_invalid", "api key expired", "renew the api key",
+        "api key not valid", "invalid api key",
+    ))
+
+
 class MoveFailureError(RuntimeError):
     def __init__(self, message: str, error_code: str | None = None):
         super().__init__(message)
@@ -352,7 +360,13 @@ REGLAS DE OPERACION:
             if isinstance(e, CircuitOpenError):
                 logger.warning("Batch LLM saltado (circuit ABIERTO): %s", e)
             else:
-                logger.error("Error en clasificacion por lote: %s", e)
+                if _is_api_key_error(e):
+                    self._notify_error(
+                        "API key de Gemini invalida o expirada. Ve a Bandeja → Cambiar API key.",
+                        notify=True,
+                    )
+                else:
+                    logger.error("Error en clasificacion por lote: %s", e)
                 self._record_api_failure(str(e))
             return None
 
@@ -371,6 +385,8 @@ REGLAS DE OPERACION:
             "(tool) mas apropiada para organizarlo o procesarlo inmediatamente."
         )
         try:
+            from runtime.circuit_breaker import CircuitOpenError
+            self._circuit.before_call()  # raises CircuitOpenError if OPEN
             consume_thread_moves()
             response = self.agent.invoke({"messages": [("user", prompt_input)]})
             resultado = response["messages"][-1].content
@@ -416,7 +432,13 @@ REGLAS DE OPERACION:
                 except Exception as e2:
                     logger.error("Fallback a Varios fallo para %s: %s", filename, e2)
             else:
-                logger.error("Error en agente ReAct para %s: %s", filename, e)
+                if _is_api_key_error(e):
+                    self._notify_error(
+                        "API key de Gemini invalida o expirada. Ve a Bandeja → Cambiar API key.",
+                        notify=True,
+                    )
+                else:
+                    logger.error("Error en agente ReAct para %s: %s", filename, e)
                 self._record_api_failure(str(e))
             self.db.update_file_status(filepath, "error")
             self._emit(FileState.ERROR, filepath, filename, reason=str(e))
