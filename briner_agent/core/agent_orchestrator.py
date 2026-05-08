@@ -40,11 +40,19 @@ _BATCH_READABLE_EXTENSIONS = {
 _BATCH_CONTENT_MAX_CHARS = 300
 
 
-def _is_api_key_error(exc: Exception) -> bool:
-    msg = str(exc).lower()
+def _is_api_key_error(exc_or_msg) -> bool:
+    msg = str(exc_or_msg).lower()
     return any(kw in msg for kw in (
         "api_key_invalid", "api key expired", "renew the api key",
         "api key not valid", "invalid api key",
+    ))
+
+
+def _is_rate_limit_error(exc_or_msg) -> bool:
+    msg = str(exc_or_msg).lower()
+    return any(kw in msg for kw in (
+        "quota", "rate limit", "resource_exhausted",
+        "too many requests", "429", "ratequotaexceeded",
     ))
 
 
@@ -105,6 +113,7 @@ class BrinerOrchestrator:
         cb_threshold = int(config.get("processing", {}).get("circuit_breaker_threshold", 3))
         cb_recovery = float(config.get("processing", {}).get("circuit_breaker_recovery_seconds", 60.0))
         self._circuit = CircuitBreaker("gemini", cb_threshold, cb_recovery)
+        self._circuit_error_type: str | None = None  # "rate_limit" | "auth_error" | None
         # Decision cache: avoids redundant LLM calls for files with same extension+stem pattern
         from classifiers.decision_cache import DecisionCache
         cache_size = int(config.get("processing", {}).get("decision_cache_size", 200))
@@ -139,19 +148,38 @@ class BrinerOrchestrator:
             self._tray.set_error(message, notify=notify)
 
     def _record_api_failure(self, message: str):
+        import json as _json
         metrics.inc(M_LLM_FAILURES_TOTAL)
         self._consecutive_api_failures += 1
+        if _is_rate_limit_error(message):
+            self._circuit_error_type = "rate_limit"
+        elif _is_api_key_error(message):
+            self._circuit_error_type = "auth_error"
         self._circuit.record_failure(message)
         from runtime.circuit_breaker import CircuitState
         if self._circuit.state == CircuitState.OPEN:
-            self._notify_error(
-                f"Gemini circuit ABIERTO tras {self._consecutive_api_failures} fallo(s). Ultimo: {message}",
-                notify=True,
-            )
+            etype = self._circuit_error_type or "unknown"
+            recovery = self._circuit.recovery_seconds
+            payload = _json.dumps({"type": etype, "recovery_seconds": recovery, "msg": message[:300]})
+            self.db.log_system_event("circuit_open", payload)
+            if etype == "rate_limit":
+                self._notify_error(
+                    f"Cuota de Gemini excedida. Reintentando automaticamente en ~{int(recovery)}s.",
+                    notify=True,
+                )
+            else:
+                self._notify_error(
+                    "API key de Gemini invalida o expirada. Ve a Bandeja → Cambiar API key.",
+                    notify=True,
+                )
 
     def _record_api_success(self):
         self._consecutive_api_failures = 0
+        prev_type = self._circuit_error_type
         self._circuit.record_success()
+        if prev_type is not None:
+            self.db.log_system_event("circuit_recovered", '{"type": "recovered"}')
+            self._circuit_error_type = None
 
     def _invoke_llm_with_timeout(self, prompt, timeout_seconds: int | None = None):
         from runtime.circuit_breaker import CircuitOpenError
@@ -360,13 +388,7 @@ REGLAS DE OPERACION:
             if isinstance(e, CircuitOpenError):
                 logger.warning("Batch LLM saltado (circuit ABIERTO): %s", e)
             else:
-                if _is_api_key_error(e):
-                    self._notify_error(
-                        "API key de Gemini invalida o expirada. Ve a Bandeja → Cambiar API key.",
-                        notify=True,
-                    )
-                else:
-                    logger.error("Error en clasificacion por lote: %s", e)
+                logger.error("Error en clasificacion por lote: %s", e)
                 self._record_api_failure(str(e))
             return None
 
@@ -425,20 +447,18 @@ REGLAS DE OPERACION:
         except Exception as e:
             from runtime.circuit_breaker import CircuitOpenError
             if isinstance(e, CircuitOpenError):
-                logger.warning("ReAct saltado (circuit ABIERTO): %s — moviendo a Varios.", e)
-                try:
-                    self._apply_move(filepath, "Varios", "system", f"Circuit abierto: {e}")
-                    return "processed"
-                except Exception as e2:
-                    logger.error("Fallback a Varios fallo para %s: %s", filename, e2)
-            else:
-                if _is_api_key_error(e):
-                    self._notify_error(
-                        "API key de Gemini invalida o expirada. Ve a Bandeja → Cambiar API key.",
-                        notify=True,
-                    )
+                if self._circuit_error_type == "rate_limit":
+                    logger.info("ReAct saltado (rate limit): %s — se reintentara automaticamente.", e)
+                    return "skipped"  # archivo queda pending, catch-up lo reintenta
                 else:
-                    logger.error("Error en agente ReAct para %s: %s", filename, e)
+                    logger.warning("ReAct saltado (circuit ABIERTO auth): %s — moviendo a Varios.", e)
+                    try:
+                        self._apply_move(filepath, "Varios", "system", f"Circuit abierto: {e}")
+                        return "processed"
+                    except Exception as e2:
+                        logger.error("Fallback a Varios fallo para %s: %s", filename, e2)
+            else:
+                logger.error("Error en agente ReAct para %s: %s", filename, e)
                 self._record_api_failure(str(e))
             self.db.update_file_status(filepath, "error")
             self._emit(FileState.ERROR, filepath, filename, reason=str(e))
@@ -563,6 +583,8 @@ REGLAS DE OPERACION:
                     status = self._process_file_with_agent(filepath, f["filename"])
                     if status == "processed":
                         result["processed"] += 1
+                    elif status == "skipped":
+                        pass  # rate limit — queda pending, no es error
                     else:
                         result["errors"] += 1
                 else:

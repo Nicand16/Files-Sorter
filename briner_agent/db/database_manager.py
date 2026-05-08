@@ -308,3 +308,15 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error("Error al obtener ultimo movimiento: %s", e)
             return None
+
+    def log_system_event(self, event_type: str, payload_json: str):
+        """Registra eventos de sistema (circuit_open, circuit_recovered) en classification_events con file_id=NULL."""
+        try:
+            with self._get_connection() as conn:
+                conn.execute(
+                    """INSERT INTO classification_events (file_id, action, decision_source, reason)
+                       VALUES (NULL, ?, 'system', ?)""",
+                    (event_type, payload_json),
+                )
+        except sqlite3.Error as e:
+            logger.error("Error al registrar evento de sistema: %s", e)

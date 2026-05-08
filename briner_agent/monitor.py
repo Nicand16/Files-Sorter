@@ -54,11 +54,21 @@ SELECT
     COALESCE(ce.category, ce.action)    AS categoria,
     COALESCE(ce.decision_source, '')    AS fuente,
     ce.action                           AS accion,
-    CASE ce.dry_run WHEN 1 THEN '(dry-run)' ELSE '' END AS modo
+    COALESCE(ce.reason, '')             AS razon
 FROM classification_events ce
 LEFT JOIN files f ON f.id = ce.file_id
+WHERE ce.file_id IS NOT NULL
 ORDER BY ce.timestamp DESC
 LIMIT 100
+"""
+
+_QUERY_SYSTEM_EVENT = """
+SELECT action, reason, timestamp
+FROM classification_events
+WHERE action IN ('circuit_open', 'circuit_recovered')
+  AND file_id IS NULL
+ORDER BY timestamp DESC
+LIMIT 1
 """
 
 _QUERY_COUNTS = "SELECT status, COUNT(*) FROM files GROUP BY status"
@@ -76,19 +86,20 @@ def _read_workspace() -> str:
 
 def _fetch_data():
     if not DB_PATH.exists():
-        return None, None
+        return None, None, None
     try:
         con = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5)
         con.row_factory = sqlite3.Row
         try:
             rows = con.execute(_QUERY_EVENTS).fetchall()
             counts_raw = con.execute(_QUERY_COUNTS).fetchall()
+            sys_event = con.execute(_QUERY_SYSTEM_EVENT).fetchone()
         finally:
             con.close()
         counts = {r[0]: r[1] for r in counts_raw}
-        return rows, counts
+        return rows, counts, sys_event
     except Exception:
-        return None, None
+        return None, None, None
 
 
 class BrinerMonitorApp:
@@ -130,9 +141,9 @@ class BrinerMonitorApp:
         frame = tk.Frame(self.root)
         frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
 
-        cols = ("hora", "archivo", "categoria", "fuente", "accion", "modo")
-        headings = ("Hora", "Archivo", "Categoría", "Fuente", "Acción", "Modo")
-        widths = (70, 250, 220, 90, 80, 68)
+        cols = ("hora", "archivo", "categoria", "fuente", "accion", "razon")
+        headings = ("Hora", "Archivo", "Categoría", "Fuente", "Acción", "Razón")
+        widths = (70, 230, 190, 80, 70, 180)
 
         self._tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="browse")
         for col, heading, width in zip(cols, headings, widths):
@@ -156,11 +167,14 @@ class BrinerMonitorApp:
         self._info_label.pack(fill=tk.X, side=tk.BOTTOM)
 
     def _refresh(self):
-        rows, counts = _fetch_data()
-        self._update_ui(rows, counts)
+        rows, counts, sys_event = _fetch_data()
+        self._update_ui(rows, counts, sys_event)
         self.root.after(_REFRESH_MS, self._refresh)
 
-    def _update_ui(self, rows, counts):
+    def _update_ui(self, rows, counts, sys_event):
+        import json as _json
+        import datetime as _dt
+
         for item in self._tree.get_children():
             self._tree.delete(item)
 
@@ -181,7 +195,7 @@ class BrinerMonitorApp:
                 row["categoria"] or "",
                 row["fuente"] or "",
                 row["accion"] or "",
-                row["modo"] or "",
+                row["razon"] or "",
             )
             tag = "error_row" if row["accion"] == "error" else ""
             self._tree.insert("", tk.END, values=values, tags=(tag,))
@@ -197,9 +211,41 @@ class BrinerMonitorApp:
             text=f"Pendientes: {pending}   Procesados: {processed}   Errores: {errors}"
         )
 
-        if has_errors or errors > 0:
+        # --- Circuit breaker state (from system events in DB) ---
+        circuit_active = False
+        circuit_msg = ""
+        circuit_is_ratelimit = False
+        if sys_event and sys_event["action"] == "circuit_open":
+            try:
+                payload = _json.loads(sys_event["reason"])
+                etype = payload.get("type", "unknown")
+                recovery_s = float(payload.get("recovery_seconds", 60))
+                event_ts = _dt.datetime.fromisoformat(sys_event["timestamp"])
+                elapsed = (_dt.datetime.now() - event_ts).total_seconds()
+                remaining = max(0, recovery_s - elapsed)
+                if remaining > 0:
+                    circuit_active = True
+                    if etype == "rate_limit":
+                        circuit_is_ratelimit = True
+                        circuit_msg = f"Cuota de Gemini excedida — reintentando en ~{int(remaining)}s automáticamente"
+                    else:
+                        circuit_msg = "API key inválida — ve a Bandeja del sistema → Cambiar API key"
+            except Exception:
+                pass
+
+        # --- Specific error reason from file events ---
+        error_reasons = [row["razon"] for row in rows if row["accion"] == "error" and row["razon"]]
+
+        if circuit_active and circuit_is_ratelimit:
+            self._status_dot.config(fg="#f59e0b")  # yellow = rate limit, recovering
+            self._status_label.config(text=circuit_msg)
+        elif circuit_active:
             self._status_dot.config(fg="#dc2626")
-            self._status_label.config(text="Hay errores")
+            self._status_label.config(text=circuit_msg)
+        elif has_errors or errors > 0:
+            self._status_dot.config(fg="#dc2626")
+            detail = f": {error_reasons[0][:80]}" if error_reasons else ""
+            self._status_label.config(text=f"Hay errores{detail}")
         elif rows:
             self._status_dot.config(fg="#22c55e")
             self._status_label.config(text="Activo")
