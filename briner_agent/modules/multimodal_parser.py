@@ -1,5 +1,7 @@
 ﻿import importlib.util
+import datetime as _dt
 import logging
+import mimetypes
 import re
 import zipfile
 from pathlib import Path
@@ -11,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_CHARS = 3000
 TEXT_EXTENSIONS = {".txt", ".csv", ".md", ".json", ".log", ".yaml", ".yml", ".xml"}
+DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".odt", ".ods"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff"}
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".flac", ".ogg", ".m4a"}
+ARCHIVE_EXTENSIONS = {".zip", ".rar", ".7z", ".tar", ".gz"}
 
 
 def _trim(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> str:
@@ -79,6 +86,188 @@ def _read_pptx(path: Path, max_chars: int) -> str:
     with zipfile.ZipFile(path) as archive:
         members = sorted(name for name in archive.namelist() if name.startswith("ppt/slides/slide") and name.endswith(".xml"))
     return _xml_text_from_zip(path, members, max_chars)
+
+
+def _size_label(size_bytes: int | None) -> str | None:
+    if size_bytes is None:
+        return None
+    value = float(size_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{size_bytes} B"
+
+
+def _timestamp_label(timestamp: float | None) -> str | None:
+    if timestamp is None:
+        return None
+    return _dt.datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+
+
+def _clean_metadata_value(value) -> str | None:
+    if value is None:
+        return None
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    return text or None
+
+
+def _compact_dict(data: dict) -> dict:
+    return {key: value for key, value in data.items() if value not in (None, "", [], {})}
+
+
+def _type_group_for_extension(suffix: str) -> str:
+    if suffix in DOCUMENT_EXTENSIONS or suffix in TEXT_EXTENSIONS:
+        return "document"
+    if suffix in IMAGE_EXTENSIONS:
+        return "image"
+    if suffix in VIDEO_EXTENSIONS:
+        return "video"
+    if suffix in AUDIO_EXTENSIONS:
+        return "audio"
+    if suffix in ARCHIVE_EXTENSIONS:
+        return "archive"
+    if suffix in {".exe", ".msi", ".bat", ".cmd", ".ps1"}:
+        return "software"
+    return "other"
+
+
+def _pdf_metadata(path: Path) -> dict:
+    if not importlib.util.find_spec("pypdf"):
+        return {}
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(path))
+    raw = reader.metadata or {}
+    fields = {
+        "title": raw.get("/Title"),
+        "author": raw.get("/Author"),
+        "subject": raw.get("/Subject"),
+        "keywords": raw.get("/Keywords"),
+        "creator": raw.get("/Creator"),
+        "producer": raw.get("/Producer"),
+        "pages": len(reader.pages),
+    }
+    return _compact_dict({key: _clean_metadata_value(value) for key, value in fields.items()})
+
+
+def _office_metadata(path: Path) -> dict:
+    metadata = {}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            if "docProps/core.xml" in names:
+                root = ElementTree.fromstring(archive.read("docProps/core.xml"))
+                for element in root.iter():
+                    tag = element.tag.rsplit("}", 1)[-1].casefold()
+                    if tag in {"title", "subject", "creator", "keywords", "description", "category"}:
+                        value = _clean_metadata_value(element.text)
+                        if value:
+                            metadata[tag] = value
+            if "docProps/app.xml" in names:
+                root = ElementTree.fromstring(archive.read("docProps/app.xml"))
+                for element in root.iter():
+                    tag = element.tag.rsplit("}", 1)[-1].casefold()
+                    if tag in {"application", "pages", "slides", "worksheets", "company"}:
+                        value = _clean_metadata_value(element.text)
+                        if value:
+                            metadata[tag] = value
+    except Exception as exc:
+        logger.debug("No se pudieron leer metadatos Office de %s: %s", path.name, exc)
+    return metadata
+
+
+def _image_metadata(path: Path) -> dict:
+    if not importlib.util.find_spec("PIL"):
+        return {}
+
+    try:
+        from PIL import ExifTags, Image
+
+        with Image.open(path) as image:
+            metadata = {
+                "format": image.format,
+                "width": image.width,
+                "height": image.height,
+                "mode": image.mode,
+            }
+            exif = image.getexif()
+            if exif:
+                decoded = {}
+                for key, value in exif.items():
+                    name = ExifTags.TAGS.get(key, str(key))
+                    if name in {"DateTime", "DateTimeOriginal", "Make", "Model", "Software"}:
+                        cleaned = _clean_metadata_value(value)
+                        if cleaned:
+                            decoded[name] = cleaned
+                if decoded:
+                    metadata["exif"] = decoded
+            return _compact_dict(metadata)
+    except Exception as exc:
+        logger.debug("No se pudieron leer metadatos de imagen de %s: %s", path.name, exc)
+        return {}
+
+
+def _archive_metadata(path: Path) -> dict:
+    if path.suffix.casefold() != ".zip":
+        return {}
+    try:
+        with zipfile.ZipFile(path) as archive:
+            names = archive.namelist()
+            return _compact_dict({
+                "entries": len(names),
+                "sample_names": names[:20],
+            })
+    except Exception as exc:
+        logger.debug("No se pudieron leer metadatos ZIP de %s: %s", path.name, exc)
+        return {}
+
+
+def collect_file_metadata(
+    file_path: str,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    include_content: bool = True,
+) -> dict:
+    """
+    Build compact, JSON-serializable context for local and LLM classification.
+    """
+    path = Path(file_path)
+    suffix = path.suffix.casefold()
+    info = {
+        "filename": path.name,
+        "extension": suffix,
+        "type_group": _type_group_for_extension(suffix),
+        "mime_type": mimetypes.guess_type(path.name)[0],
+    }
+
+    try:
+        stat = path.stat()
+        info.update({
+            "size_bytes": stat.st_size,
+            "size_label": _size_label(stat.st_size),
+            "modified_time": _timestamp_label(stat.st_mtime),
+        })
+    except OSError as exc:
+        info["stat_error"] = str(exc)
+        return _compact_dict(info)
+
+    try:
+        if suffix == ".pdf":
+            info["document_metadata"] = _pdf_metadata(path)
+        elif suffix in {".docx", ".xlsx", ".pptx"}:
+            info["document_metadata"] = _office_metadata(path)
+        elif suffix in IMAGE_EXTENSIONS:
+            info["media_metadata"] = _image_metadata(path)
+        elif suffix in ARCHIVE_EXTENSIONS:
+            info["archive_metadata"] = _archive_metadata(path)
+    except Exception as exc:
+        info["metadata_error"] = str(exc)
+
+    if include_content and (suffix in DOCUMENT_EXTENSIONS or suffix in TEXT_EXTENSIONS):
+        info["content_preview"] = extract_document_content(str(path), max_chars)
+
+    return _compact_dict(info)
 
 
 def extract_document_content(file_path: str, max_chars: int = DEFAULT_MAX_CHARS) -> str:

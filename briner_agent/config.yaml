@@ -1,6 +1,6 @@
 ﻿app:
   name: "Briner"
-  version: "1.0.0"
+  version: "1.2.0"
   description: "AI Autonomous Agent for File Management"
 
 monitoring:
@@ -31,11 +31,17 @@ llm:
 
 rules:
   fallback_documents_to_varios: false
+  ambiguous_document_fallback_category: "Varios/Documentos por Revisar"
 
 processing:
   max_workers: 2
   max_files_per_cycle: 500
   llm_batch_size: 50
+  llm_individual_threshold: 6
+  llm_bulk_content_max_chars: 700
+  llm_individual_content_max_chars: 3000
+  local_context_min_confidence: 0.84
+  varios_min_confidence: 0.82
   llm_timeout_seconds: 60
   error_retry_seconds: 60
   circuit_breaker_threshold: 3
@@ -49,19 +55,19 @@ parsing:
 taxonomy:
   categories:
     - category: "Universidad y Estudio/Actividades y Tareas"
-      keywords: ["actividad", "taller", "protocolo", "ensayo", "tcc", "algebra", "calculo", "bd1", "ejercicio", "tarea", "produccion textual"]
+      keywords: ["actividad", "taller", "protocolo", "ensayo", "tcc", "algebra", "calculo", "bd1", "ejercicio", "tarea", "produccion textual", "parcial", "quiz", "evaluacion", "laboratorio", "entrega", "rubrica"]
     - category: "Universidad y Estudio/Material de Estudio y Modulos"
-      keywords: ["modulo", "libro", "guia", "manual", "normas apa", "glosario", "latex", "tex"]
+      keywords: ["modulo", "libro", "guia", "manual", "normas apa", "glosario", "latex", "tex", "syllabus", "clase", "lectura", "diapositivas"]
     - category: "Universidad y Estudio/Tramites Academicos"
-      keywords: ["reglamento", "acuerdo", "recibo", "matricula", "diploma", "certificado_1002"]
+      keywords: ["reglamento", "acuerdo", "recibo", "matricula", "diploma", "certificado_1002", "certificado academico", "constancia de estudio", "notas", "calificaciones", "homologacion", "inscripcion"]
     - category: "Trabajo y Empleo/CVs y Portafolios"
-      keywords: ["cv", "resume", "hoja de vida", "curriculum"]
+      keywords: ["cv", "resume", "hoja de vida", "curriculum", "portfolio", "portafolio"]
     - category: "Trabajo y Empleo/Procesos de Seleccion"
-      keywords: ["interview", "oferta", "entrevista", "technical support", "simetrik", "openprovider", "js held", "contract", "prueba_tecnica", "ticket"]
+      keywords: ["interview", "oferta", "entrevista", "technical support", "simetrik", "openprovider", "js held", "contract", "prueba_tecnica", "prueba tecnica", "ticket", "recruiter", "reclutador", "job offer", "contrato laboral"]
     - category: "Documentos Personales/Identificacion e Impuestos"
-      keywords: ["cedula", "rut", "identificacion", "passport", "visa"]
+      keywords: ["cedula", "rut", "identificacion", "passport", "pasaporte", "visa", "dni", "tax", "impuesto", "declaracion de renta"]
     - category: "Documentos Personales/Finanzas y Salud"
-      keywords: ["certificado", "factura", "comprobante", "pago", "afiliacion", "eps", "receipt"]
+      keywords: ["certificado", "factura", "comprobante", "pago", "afiliacion", "eps", "receipt", "recibo de pago", "banco", "extracto", "cuenta", "medico", "salud", "historia clinica", "laboratorio clinico"]
     - category: "Juegos y Emulacion/Torrents"
       extensions: [".torrent"]
     - category: "Juegos y Emulacion/ROMs e ISOs"

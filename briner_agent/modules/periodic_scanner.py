@@ -32,6 +32,7 @@ def _category_roots(watch_path: Path, config: dict) -> set[Path]:
         if top and top not in aliases:
             roots.add((watch_path / top).resolve())
     roots.add((watch_path / "Varios").resolve())
+    roots.add((watch_path / "_Briner Quarantine").resolve())
     return roots
 
 

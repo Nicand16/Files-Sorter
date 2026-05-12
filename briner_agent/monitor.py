@@ -13,9 +13,12 @@ import sqlite3
 import sys
 import threading
 import tkinter as tk
+import tkinter.filedialog
 import tkinter.messagebox
 from pathlib import Path
 from tkinter import ttk
+
+from runtime.commands import enqueue_command
 
 import pystray
 from PIL import Image, ImageDraw
@@ -111,6 +114,7 @@ class BrinerMonitorApp:
         root.minsize(640, 400)
         root.geometry("940x540")
         self._tray: pystray.Icon | None = None
+        self._paused = False
         root.bind('<Unmap>', self._on_minimize)
         root.protocol('WM_DELETE_WINDOW', self._on_close)
         self._build_ui()
@@ -131,6 +135,11 @@ class BrinerMonitorApp:
 
         btn_frame = tk.Frame(top)
         btn_frame.pack(side=tk.RIGHT)
+        tk.Button(btn_frame, text="Cambiar carpeta", command=self._change_workspace).pack(side=tk.LEFT, padx=4)
+        self._pause_button = tk.Button(btn_frame, text="Pausar", command=self._toggle_pause)
+        self._pause_button.pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Deshacer", command=self._undo_last).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="Revisar varios", command=self._open_review_folder).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="⚡ Forzar escaneo", command=self._force_scan).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="↺ Actualizar ahora", command=self._refresh).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="Abrir logs", command=self._open_logs).pack(side=tk.LEFT, padx=4)
@@ -255,10 +264,56 @@ class BrinerMonitorApp:
 
     def _force_scan(self):
         try:
+            enqueue_command(_briner_dir, "force_scan")
             _SENTINEL.touch()
             self._status_label.config(text="Escaneo solicitado — Briner procesará en breve")
         except Exception as exc:
             tkinter.messagebox.showerror("Briner Monitor", f"No se pudo solicitar escaneo:\n{exc}")
+
+    def _change_workspace(self):
+        folder = tkinter.filedialog.askdirectory(title="Selecciona la carpeta que Briner debe organizar")
+        if not folder:
+            return
+        try:
+            enqueue_command(_briner_dir, "change_workspace", {"workspace_dir": folder})
+            self._status_label.config(text="Cambio de carpeta solicitado. Briner lo aplicara en breve.")
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo cambiar la carpeta:\n{exc}")
+
+    def _toggle_pause(self):
+        self._paused = not self._paused
+        command = "pause" if self._paused else "resume"
+        try:
+            enqueue_command(_briner_dir, command)
+            self._pause_button.config(text="Reanudar" if self._paused else "Pausar")
+            self._status_label.config(text="Organizacion pausada" if self._paused else "Organizacion reanudada")
+        except Exception as exc:
+            self._paused = not self._paused
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo enviar el comando:\n{exc}")
+
+    def _undo_last(self):
+        try:
+            enqueue_command(_briner_dir, "undo_last")
+            self._status_label.config(text="Deshacer solicitado. Briner lo aplicara en breve.")
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo solicitar deshacer:\n{exc}")
+
+    def _open_review_folder(self):
+        workspace = _read_workspace()
+        if not workspace:
+            tkinter.messagebox.showinfo("Briner Monitor", "Primero configura una carpeta monitoreada.")
+            return
+        root = Path(workspace)
+        candidates = [
+            root / "7. Varios" / "Documentos por Revisar",
+            root / "Varios" / "Documentos por Revisar",
+        ]
+        target = next((path for path in candidates if path.exists()), candidates[0])
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(target))
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo abrir la carpeta de revision:\n{exc}")
 
     def _change_api_key(self):
         import subprocess
@@ -283,8 +338,9 @@ class BrinerMonitorApp:
         env_path = _briner_dir / ".env"
         try:
             env_path.write_text(f"GOOGLE_API_KEY={new_key}\n", encoding="utf-8")
+            enqueue_command(_briner_dir, "reload_api_key")
             self._status_label.config(
-                text="API key guardada. Se aplicara en el proximo ciclo o usa bandeja -> Cambiar API key."
+                text="API key guardada. Briner la recargara automaticamente."
             )
         except Exception as exc:
             tkinter.messagebox.showerror("Briner Monitor", f"No se pudo guardar la API key:\n{exc}")

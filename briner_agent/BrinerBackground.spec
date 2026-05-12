@@ -33,6 +33,7 @@ a = Analysis(
         'runtime',
         'runtime.event_bus',
         'runtime.circuit_breaker',
+        'runtime.commands',
         'classifiers',
         'classifiers.decision_cache',
     ],

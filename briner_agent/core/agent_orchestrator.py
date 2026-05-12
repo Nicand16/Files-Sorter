@@ -1,4 +1,4 @@
-import json
+﻿import json
 import logging
 import re
 import threading
@@ -26,18 +26,22 @@ from infra.metrics import (
     metrics,
 )
 from modules.crud_executor import consume_thread_moves, move_file_secure
-from modules.rules_engine import build_taxonomy_prompt, classify_file
+from modules.rules_engine import (
+    build_taxonomy_prompt,
+    classify_file,
+    classify_file_context,
+    is_document_extension,
+    normalize_text,
+    rank_file_categories,
+    taxonomy_categories,
+)
 from runtime.event_bus import FileEvent, FileState, bus
 
 logger = logging.getLogger(__name__)
 
-# Extensiones cuyo contenido puede ayudar al LLM a clasificar
-_BATCH_READABLE_EXTENSIONS = {
-    ".pdf", ".docx", ".xlsx", ".pptx",
-    ".txt", ".csv", ".md", ".json", ".log", ".yaml", ".yml", ".xml",
-}
-# Chars de preview por archivo en llamadas por lote (mucho menor que el modo individual)
-_BATCH_CONTENT_MAX_CHARS = 300
+# Previews cortos para bulk; el modo individual usa un contexto mas amplio.
+_DEFAULT_BULK_CONTENT_MAX_CHARS = 700
+_DEFAULT_INDIVIDUAL_CONTENT_MAX_CHARS = 3000
 
 
 def _is_api_key_error(exc_or_msg) -> bool:
@@ -72,9 +76,9 @@ class BrinerOrchestrator:
     Orquestador principal del agente Briner.
 
     Flujo de procesamiento en 3 fases:
-      1. Reglas deterministicas (sin API) — extension/keyword → movimiento directo.
+      1. Reglas deterministicas (sin API) â€” extension/keyword â†’ movimiento directo.
       2. Clasificacion por lote (1 API call para todos los archivos ambiguos del ciclo).
-      3. Fallback ReAct por archivo — solo si el lote falla.
+      3. Fallback ReAct por archivo â€” solo si el lote falla.
     """
 
     def __init__(self, config: dict, db_manager, workspace_dir=None):
@@ -99,6 +103,28 @@ class BrinerOrchestrator:
         self.max_files_per_cycle = max(1, int(config.get("processing", {}).get("max_files_per_cycle", 25)))
         self.llm_batch_size = max(1, int(config.get("processing", {}).get("llm_batch_size", 15)))
         self.llm_timeout_seconds = int(config.get("processing", {}).get("llm_timeout_seconds", 60))
+        processing_cfg = config.get("processing", {})
+        parsing_cfg = config.get("parsing", {})
+        rules_cfg = config.get("rules", {})
+        self.llm_individual_threshold = max(1, int(processing_cfg.get("llm_individual_threshold", 6)))
+        self.llm_bulk_content_max_chars = max(
+            150,
+            int(processing_cfg.get("llm_bulk_content_max_chars", _DEFAULT_BULK_CONTENT_MAX_CHARS)),
+        )
+        self.llm_individual_content_max_chars = max(
+            self.llm_bulk_content_max_chars,
+            int(processing_cfg.get(
+                "llm_individual_content_max_chars",
+                parsing_cfg.get("max_chars", _DEFAULT_INDIVIDUAL_CONTENT_MAX_CHARS),
+            )),
+        )
+        self.local_context_min_confidence = float(processing_cfg.get("local_context_min_confidence", 0.84))
+        self.varios_min_confidence = float(processing_cfg.get("varios_min_confidence", 0.82))
+        self.ambiguous_document_fallback_category = rules_cfg.get(
+            "ambiguous_document_fallback_category",
+            "Varios/Documentos por Revisar",
+        )
+        self._taxonomy_categories = taxonomy_categories(config)
         self._active_paths: set[str] = set()
         self._active_paths_lock = threading.Lock()
         self._tray = None
@@ -107,6 +133,7 @@ class BrinerOrchestrator:
         self._llm_obj = None
         self._llm_initialized = False
         self._llm_init_lock = threading.Lock()
+        self._llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="BrinerLLMInvoke")
         self.agent = None  # set lazily when LLM first initializes
         # Circuit breaker replaces the bare consecutive-failures counter
         from runtime.circuit_breaker import CircuitBreaker
@@ -119,6 +146,25 @@ class BrinerOrchestrator:
         cache_size = int(config.get("processing", {}).get("decision_cache_size", 200))
         cache_ttl = float(config.get("processing", {}).get("decision_cache_ttl_seconds", 3600.0))
         self._cache = DecisionCache(max_size=cache_size, ttl_seconds=cache_ttl)
+        self._warm_decision_cache(cache_size)
+
+    def _warm_decision_cache(self, limit: int):
+        if not hasattr(self.db, "get_recent_classification_decisions"):
+            return
+        loaded = 0
+        for row in self.db.get_recent_classification_decisions(limit=limit):
+            category = row.get("category")
+            if not category or self._is_varios_category(category):
+                continue
+            self._cache.put(
+                row.get("filename") or "",
+                row.get("extension") or "",
+                category,
+                row.get("decision_source") or "db",
+            )
+            loaded += 1
+        if loaded:
+            logger.info("Decision cache precargado desde SQLite: %s decision(es).", loaded)
 
     @property
     def llm(self):
@@ -169,7 +215,7 @@ class BrinerOrchestrator:
                 )
             else:
                 self._notify_error(
-                    "API key de Gemini invalida o expirada. Ve a Bandeja → Cambiar API key.",
+                    "API key de Gemini invalida o expirada. Ve a Bandeja â†’ Cambiar API key.",
                     notify=True,
                 )
 
@@ -186,8 +232,7 @@ class BrinerOrchestrator:
         self._circuit.before_call()  # raises CircuitOpenError if OPEN
         timeout = timeout_seconds or self.llm_timeout_seconds
         metrics.inc(M_LLM_CALLS_TOTAL)
-        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="BrinerLLMInvoke")
-        future = executor.submit(self.llm.invoke, prompt)
+        future = self._llm_executor.submit(self.llm.invoke, prompt)
         try:
             with metrics.span(M_LLM_CALL):
                 return future.result(timeout=timeout)
@@ -196,8 +241,6 @@ class BrinerOrchestrator:
             message = f"Timeout de LLM despues de {timeout} segundos."
             self._record_api_failure(message)
             raise TimeoutError(message)
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
 
     def _handle_move_failure(self, filepath: str, move_result: dict):
         message = move_result.get("message", "Error desconocido al mover archivo.")
@@ -225,9 +268,11 @@ Tu mision es organizar el directorio de trabajo del usuario siguiendo ESTRICTAME
 {taxonomy_prompt}
 
 REGLAS DE OPERACION:
-- IGNORAR archivos "desktop.ini" (puedes usar delete_file para borrarlos, pero no los muevas a Varios).
+- IGNORAR archivos "desktop.ini" (puedes usar delete_file solo para mandarlos a cuarentena, nunca a Varios).
 - Usa 'analyze_document_content' si el nombre es ambiguo, pero da prioridad a las palabras clave listadas.
 - Llama a 'move_file' usando EXACTAMENTE la ruta de la categoria como 'destination_folder_name' (ej: "Universidad y Estudio/Actividades y Tareas").
+- Usa Varios solo si nombre, tipo, metadatos y contenido no dan evidencia razonable para una categoria especifica.
+- Si el archivo es PDF/Office/texto y hay una pista academica, laboral, personal o financiera, elige la categoria especifica correspondiente en vez de Varios.
 - NUNCA pidas confirmacion. Usa la herramienta 'move_file' para categorizar el archivo inmediatamente.
 """
         return create_react_agent(
@@ -295,7 +340,14 @@ REGLAS DE OPERACION:
     # Helpers de movimiento                                                #
     # ------------------------------------------------------------------ #
 
-    def _apply_move(self, filepath: str, category: str, decision_source: str, reason: str):
+    def _apply_move(
+        self,
+        filepath: str,
+        category: str,
+        decision_source: str,
+        reason: str,
+        confidence: float | None = None,
+    ):
         """Mueve un archivo a la categoria indicada y registra el evento en DB."""
         filename = Path(filepath).name
         move_result = move_file_secure(
@@ -316,7 +368,7 @@ REGLAS DE OPERACION:
             new_path=move_result.get("new_path"),
             category=category,
             reason=reason,
-            confidence=None,
+            confidence=confidence,
             dry_run=move_result.get("dry_run", False),
         )
         self.db.log_action(filepath, f"{decision_source}_move", move_result["message"])
@@ -331,51 +383,226 @@ REGLAS DE OPERACION:
         self._apply_move(filepath, category, "system", reason)
 
     # ------------------------------------------------------------------ #
+    # Helpers de contexto y validacion                                    #
+    # ------------------------------------------------------------------ #
+
+    def _is_varios_category(self, category: str | None) -> bool:
+        return normalize_text(category or "").startswith("varios")
+
+    def _fallback_category_for(self, file_info: dict | None = None, filepath: str | None = None) -> str:
+        extension = ""
+        if file_info:
+            extension = file_info.get("extension") or file_info.get("metadata", {}).get("extension") or ""
+        if not extension and filepath:
+            extension = Path(filepath).suffix
+        if is_document_extension(extension):
+            return self.ambiguous_document_fallback_category
+        return "Varios"
+
+    def _normalize_category(self, category: str | None) -> str | None:
+        if not category:
+            return None
+        raw = str(category).strip().strip('"').strip("'").replace("\\", "/")
+        raw = re.sub(r"\s*/\s*", "/", raw)
+        raw = re.sub(r"^\d+\.\s*", "", raw)
+        if not raw:
+            return None
+        if self._is_varios_category(raw):
+            return raw if raw == "Varios" or raw.startswith("Varios/") else "Varios"
+
+        by_normalized = {normalize_text(item): item for item in self._taxonomy_categories}
+        direct = by_normalized.get(normalize_text(raw))
+        if direct:
+            return direct
+
+        # Some models return only a numbered top-level alias. Strip the number
+        # and retry against full taxonomy paths before treating it as invalid.
+        normalized_raw = normalize_text(raw)
+        for logical, physical in self.destination_aliases.items():
+            physical_norm = normalize_text(re.sub(r"^\d+\.\s*", "", physical))
+            if normalized_raw.startswith(physical_norm):
+                suffix = raw.split("/", 1)[1] if "/" in raw else ""
+                candidate = f"{logical}/{suffix}" if suffix else logical
+                direct = by_normalized.get(normalize_text(candidate))
+                if direct:
+                    return direct
+        return None
+
+    def _response_text(self, response) -> str:
+        content = getattr(response, "content", response)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if isinstance(item, dict):
+                    parts.append(str(item.get("text") or item.get("content") or ""))
+                else:
+                    parts.append(str(item))
+            return "\n".join(part for part in parts if part)
+        return str(content)
+
+    def _extract_json_payload(self, text: str):
+        text = text.strip()
+        if not text:
+            return None
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+        match = re.search(r"(\{.*\}|\[.*\])", text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                return None
+        return None
+
+    def _parse_llm_decisions(self, response) -> list[dict] | None:
+        payload = self._extract_json_payload(self._response_text(response))
+        if payload is None:
+            return None
+        if isinstance(payload, dict):
+            if isinstance(payload.get("decisions"), list):
+                return payload["decisions"]
+            if "filepath" in payload or "category" in payload:
+                return [payload]
+        if isinstance(payload, list):
+            return payload
+        return None
+
+    def _compact_prompt_payload(self, info: dict) -> dict:
+        metadata = info.get("metadata", {})
+        payload = {
+            "filepath": info.get("filepath"),
+            "filename": info.get("filename"),
+            "extension": info.get("extension"),
+            "type_group": metadata.get("type_group"),
+            "mime_type": metadata.get("mime_type"),
+            "size": metadata.get("size_label") or metadata.get("size_bytes"),
+            "modified_time": metadata.get("modified_time"),
+            "document_metadata": metadata.get("document_metadata"),
+            "media_metadata": metadata.get("media_metadata"),
+            "archive_metadata": metadata.get("archive_metadata"),
+            "content_preview": metadata.get("content_preview"),
+            "local_candidates": info.get("local_candidates"),
+        }
+        return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
+
+    def _build_file_infos(self, files: list[dict], max_chars: int) -> list[dict]:
+        from modules.multimodal_parser import collect_file_metadata
+
+        def _build(f):
+            filepath = f["filepath"]
+            metadata = collect_file_metadata(filepath, max_chars=max_chars, include_content=True)
+            extension = f.get("extension") or metadata.get("extension") or Path(filepath).suffix
+            info = {
+                "filepath": filepath,
+                "filename": f["filename"],
+                "extension": extension,
+                "metadata": metadata,
+            }
+            info["local_candidates"] = rank_file_categories(
+                f["filename"],
+                extension,
+                metadata,
+                self.config,
+                limit=3,
+            )
+            return info
+
+        workers = min(8, max(1, len(files)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(_build, files))
+
+    def _best_local_candidate(self, info: dict) -> dict | None:
+        candidates = info.get("local_candidates") or []
+        return candidates[0] if candidates else None
+
+    def _should_cache_decision(self, category: str, confidence: float | None) -> bool:
+        if self._is_varios_category(category):
+            return False
+        return confidence is None or confidence >= 0.72
+
+    def _coerce_confidence(self, value) -> float | None:
+        try:
+            confidence = float(value)
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, min(1.0, confidence))
+
+    def _final_category_from_llm(self, info: dict, decision: dict | None) -> tuple[str, str, float | None]:
+        decision = decision or {}
+        confidence = self._coerce_confidence(decision.get("confidence"))
+        category = self._normalize_category(decision.get("category"))
+        reason = str(decision.get("reason") or "Clasificacion por LLM.").strip()
+        local = self._best_local_candidate(info)
+        local_category = local.get("category") if local else None
+        local_confidence = float(local.get("confidence", 0.0)) if local else 0.0
+        is_doc = is_document_extension(info.get("extension"))
+
+        if not category:
+            if local_category and local_confidence >= 0.72:
+                return local_category, f"LLM no devolvio categoria valida; se uso candidato local: {local.get('reason')}.", local_confidence
+            fallback = self._fallback_category_for(info)
+            return fallback, "LLM no devolvio categoria valida; enviado a revision.", confidence
+
+        if self._is_varios_category(category) and is_doc:
+            llm_confidence = confidence if confidence is not None else 0.0
+            if local_category and local_confidence >= 0.72 and llm_confidence < self.varios_min_confidence:
+                return (
+                    local_category,
+                    f"LLM propuso Varios con baja evidencia; candidato local usado: {local.get('reason')}.",
+                    max(local_confidence, llm_confidence),
+                )
+            if llm_confidence < self.varios_min_confidence:
+                fallback = self._fallback_category_for(info)
+                return (
+                    fallback,
+                    "LLM no tuvo confianza suficiente para mandar documento a Varios; enviado a revision.",
+                    confidence,
+                )
+
+        return category, reason, confidence
+
+    # ------------------------------------------------------------------ #
     # Fase 2: clasificacion por lote                                       #
     # ------------------------------------------------------------------ #
 
     def _classify_batch_with_llm(self, files: list[dict]) -> list[dict] | None:
         """
         Clasifica un lote de archivos ambiguos en una sola llamada al LLM.
-        Pre-lee contenido de documentos localmente para incluirlo en el prompt.
-        Retorna list[{filepath, category}] o None si falla.
+        Los archivos llegan enriquecidos con metadatos/previews compactos.
+        Retorna list[{filepath, category, confidence, reason}] o None si falla.
         """
-        from modules.multimodal_parser import extract_document_content
-
-        def _extract_preview(f):
-            info = {"filepath": f["filepath"], "filename": f["filename"]}
-            ext = (f.get("extension") or "").lower()
-            if ext in _BATCH_READABLE_EXTENSIONS and Path(f["filepath"]).exists():
-                try:
-                    info["content_preview"] = extract_document_content(f["filepath"], _BATCH_CONTENT_MAX_CHARS)
-                except Exception:
-                    pass
-            return info
-
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            file_infos = list(pool.map(_extract_preview, files))
-
         taxonomy = build_taxonomy_prompt(self.config)
-        files_json = json.dumps(file_infos, ensure_ascii=False, indent=2)
+        files_json = json.dumps([self._compact_prompt_payload(f) for f in files], ensure_ascii=False, indent=2)
 
         prompt = (
-            "Eres un clasificador de archivos. Clasifica cada archivo segun la taxonomia.\n"
+            "Eres un clasificador de archivos preciso y conservador. Clasifica cada archivo segun la taxonomia.\n"
             "Responde EXCLUSIVAMENTE con un JSON array valido, sin texto adicional ni bloques markdown.\n\n"
             f"Taxonomia:\n{taxonomy}\n\n"
+            "Politica para Varios:\n"
+            "- Usa Varios solo si nombre, extension, metadatos y preview no dan evidencia razonable para una categoria especifica.\n"
+            "- No mandes PDF, DOCX, XLSX, PPTX o TXT a Varios si hay senales academicas, laborales, personales, financieras o de salud.\n"
+            "- Si hay varias opciones, elige la categoria mas especifica y reporta confianza moderada en vez de usar Varios.\n\n"
             "Formato de respuesta (un objeto por archivo):\n"
-            '[{"filepath": "<ruta exacta>", "category": "<categoria de la taxonomia o Varios>"}]\n\n'
+            '[{"filepath": "<ruta exacta>", "category": "<categoria exacta de la taxonomia o Varios>", '
+            '"confidence": 0.0, "reason": "<evidencia breve>"}]\n\n'
             f"Archivos a clasificar:\n{files_json}"
         )
 
         try:
             response = self._invoke_llm_with_timeout(prompt, timeout_seconds=60)
-            text = response.content.strip()
-            match = re.search(r"\[.*\]", text, re.DOTALL)
-            if not match:
-                logger.warning("Batch LLM no retorno JSON valido. Respuesta: %.200s", text)
-                return None
-            results = json.loads(match.group())
+            results = self._parse_llm_decisions(response)
             if not isinstance(results, list):
+                logger.warning("Batch LLM no retorno JSON valido. Respuesta: %.200s", self._response_text(response))
                 return None
             self._record_api_success()
             logger.info("Batch LLM clasifico %d/%d archivos en una sola llamada.", len(results), len(files))
@@ -389,6 +616,46 @@ REGLAS DE OPERACION:
                 logger.warning("Batch LLM saltado (circuit ABIERTO): %s", e)
             else:
                 logger.error("Error en clasificacion por lote: %s", e)
+                self._record_api_failure(str(e))
+            return None
+
+    def _classify_single_with_llm(self, file_info: dict) -> dict | None:
+        """Clasificacion LLM individual con contexto amplio para pocos archivos."""
+        taxonomy = build_taxonomy_prompt(self.config)
+        file_json = json.dumps(self._compact_prompt_payload(file_info), ensure_ascii=False, indent=2)
+        prompt = (
+            "Eres un clasificador de archivos muy preciso. Analiza un solo archivo usando nombre, tipo, "
+            "metadatos y preview de contenido.\n"
+            "Responde EXCLUSIVAMENTE con un objeto JSON valido, sin markdown.\n\n"
+            f"Taxonomia:\n{taxonomy}\n\n"
+            "Reglas:\n"
+            "- Elige una categoria exacta de la taxonomia cuando exista evidencia razonable.\n"
+            "- Varios es ultima opcion: usalo solo si no hay evidencia util en nombre, tipo, metadatos ni contenido.\n"
+            "- Para PDF/Office/texto, si hay pistas academicas, laborales, personales, financieras o de salud, "
+            "elige la categoria especifica correspondiente aunque la confianza no sea perfecta.\n"
+            "- Usa confidence entre 0 y 1 y explica la evidencia en reason.\n\n"
+            'Formato: {"filepath": "<ruta exacta>", "category": "<categoria exacta o Varios>", '
+            '"confidence": 0.0, "reason": "<evidencia breve>"}\n\n'
+            f"Archivo:\n{file_json}"
+        )
+
+        try:
+            response = self._invoke_llm_with_timeout(prompt, timeout_seconds=self.llm_timeout_seconds)
+            results = self._parse_llm_decisions(response)
+            if not results:
+                logger.warning("LLM individual no retorno JSON valido para %s: %.200s", file_info["filename"], self._response_text(response))
+                return None
+            self._record_api_success()
+            return results[0]
+        except TimeoutError as e:
+            logger.error("Timeout en clasificacion individual para %s: %s", file_info["filename"], e)
+            return None
+        except Exception as e:
+            from runtime.circuit_breaker import CircuitOpenError
+            if isinstance(e, CircuitOpenError):
+                logger.warning("LLM individual saltado (circuit ABIERTO): %s", e)
+            else:
+                logger.error("Error en clasificacion individual para %s: %s", file_info["filename"], e)
                 self._record_api_failure(str(e))
             return None
 
@@ -448,15 +715,20 @@ REGLAS DE OPERACION:
             from runtime.circuit_breaker import CircuitOpenError
             if isinstance(e, CircuitOpenError):
                 if self._circuit_error_type == "rate_limit":
-                    logger.info("ReAct saltado (rate limit): %s — se reintentara automaticamente.", e)
+                    logger.info("ReAct saltado (rate limit): %s â€” se reintentara automaticamente.", e)
                     return "skipped"  # archivo queda pending, catch-up lo reintenta
                 else:
-                    logger.warning("ReAct saltado (circuit ABIERTO auth): %s — moviendo a Varios.", e)
+                    logger.warning("ReAct saltado (circuit ABIERTO auth): %s â€” usando fallback controlado.", e)
                     try:
-                        self._apply_move(filepath, "Varios", "system", f"Circuit abierto: {e}")
+                        self._apply_move(
+                            filepath,
+                            self._fallback_category_for(filepath=filepath),
+                            "system",
+                            f"Circuit abierto: {e}",
+                        )
                         return "processed"
                     except Exception as e2:
-                        logger.error("Fallback a Varios fallo para %s: %s", filename, e2)
+                        logger.error("Fallback controlado fallo para %s: %s", filename, e2)
             else:
                 logger.error("Error en agente ReAct para %s: %s", filename, e)
                 self._record_api_failure(str(e))
@@ -486,6 +758,148 @@ REGLAS DE OPERACION:
                 processing=True,
             )
 
+    def _process_remaining_ambiguous(
+        self,
+        remaining: list[dict],
+        result: dict,
+        tray=None,
+        base_processed_total: int = 0,
+        base_errors_total: int = 0,
+        prefer_bulk: bool = False,
+    ):
+        if self.llm:
+            self._update_tray_progress(
+                tray,
+                f"LLM: {'bulk' if prefer_bulk else 'individual'} para {len(remaining)} ambiguos",
+                result,
+                base_processed_total,
+                base_errors_total,
+                pending=len(remaining),
+            )
+
+            if prefer_bulk:
+                classifications = self._classify_batch_with_llm(remaining)
+                if classifications is not None:
+                    by_path = {
+                        c.get("filepath"): c
+                        for c in classifications
+                        if isinstance(c, dict) and c.get("filepath")
+                    }
+                    successful = 0
+                    for info in remaining:
+                        filepath = info["filepath"]
+                        try:
+                            category, reason, confidence = self._final_category_from_llm(info, by_path.get(filepath))
+                            self._apply_move(filepath, category, "llm_batch", reason, confidence=confidence)
+                            if self._should_cache_decision(category, confidence):
+                                self._cache.put(info["filename"], info.get("extension") or "", category, "llm_batch")
+                            result["processed"] += 1
+                            successful += 1
+                        except Exception as e:
+                            logger.error("Error aplicando movimiento de lote para %s: %s", info["filename"], e)
+                            self.db.update_file_status(filepath, "error")
+                            result["errors"] += 1
+                            self._emit(FileState.ERROR, filepath, info["filename"], reason=str(e))
+                        finally:
+                            self._release_path(filepath)
+                    self._update_tray_progress(
+                        tray,
+                        f"LLM bulk: {successful}/{len(remaining)} clasificados",
+                        result,
+                        base_processed_total,
+                        base_errors_total,
+                        pending=0,
+                    )
+                    return
+            else:
+                failed_infos = []
+                successful = 0
+                for info in remaining:
+                    filepath = info["filepath"]
+                    release_now = True
+                    try:
+                        decision = self._classify_single_with_llm(info)
+                        if decision is None:
+                            failed_infos.append(info)
+                            release_now = False
+                            continue
+                        category, reason, confidence = self._final_category_from_llm(info, decision)
+                        self._apply_move(filepath, category, "llm_individual", reason, confidence=confidence)
+                        if self._should_cache_decision(category, confidence):
+                            self._cache.put(info["filename"], info.get("extension") or "", category, "llm_individual")
+                        result["processed"] += 1
+                        successful += 1
+                    except Exception as e:
+                        logger.error("Error aplicando movimiento individual para %s: %s", info["filename"], e)
+                        self.db.update_file_status(filepath, "error")
+                        result["errors"] += 1
+                        self._emit(FileState.ERROR, filepath, info["filename"], reason=str(e))
+                    finally:
+                        if release_now:
+                            self._release_path(filepath)
+                self._update_tray_progress(
+                    tray,
+                    f"LLM individual: {successful}/{len(remaining)} clasificados",
+                    result,
+                    base_processed_total,
+                    base_errors_total,
+                    pending=len(failed_infos),
+                )
+                if not failed_infos:
+                    return
+                remaining = failed_infos
+
+            self._update_tray_progress(
+                tray,
+                f"LLM fallo; fallback para {len(remaining)} archivos",
+                result,
+                base_processed_total,
+                base_errors_total,
+                pending=len(remaining),
+            )
+
+        for info in remaining:
+            filepath = info["filepath"]
+            try:
+                if self.agent:
+                    status = self._process_file_with_agent(filepath, info["filename"])
+                    if status == "processed":
+                        result["processed"] += 1
+                    elif status == "skipped":
+                        pass
+                    else:
+                        result["errors"] += 1
+                else:
+                    fallback = self._fallback_category_for(info)
+                    self._apply_move(filepath, fallback, "system", "Sin agente LLM disponible; fallback controlado.")
+                    result["processed"] += 1
+            except MoveFailureError as e:
+                logger.error("Movimiento fallido en fallback individual para %s: %s", info["filename"], e)
+                self.db.update_file_status(filepath, "error")
+                result["errors"] += 1
+                self._emit(FileState.ERROR, filepath, info["filename"], reason=str(e))
+            except Exception as e:
+                logger.error("Error en fallback individual para %s: %s; usando fallback controlado.", info["filename"], e)
+                try:
+                    self._apply_move(filepath, self._fallback_category_for(info), "system", f"Error LLM: {e}")
+                    result["processed"] += 1
+                except Exception as e2:
+                    logger.error("Fallback controlado tambien fallo para %s: %s", info["filename"], e2)
+                    self.db.update_file_status(filepath, "error")
+                    result["errors"] += 1
+                    self._emit(FileState.ERROR, filepath, info["filename"], reason=str(e2))
+            finally:
+                self._release_path(filepath)
+
+        self._update_tray_progress(
+            tray,
+            f"Fallback: {len(remaining)} archivos revisados",
+            result,
+            base_processed_total,
+            base_errors_total,
+            pending=0,
+        )
+
     def _process_ambiguous_batch(
         self,
         files: list[dict],
@@ -493,19 +907,19 @@ REGLAS DE OPERACION:
         tray=None,
         base_processed_total: int = 0,
         base_errors_total: int = 0,
+        prefer_bulk: bool = False,
     ):
         """
-        Intenta clasificar el chunk con una sola llamada LLM.
-        Consulta el cache de decisiones primero para evitar llamadas redundantes.
-        Si el LLM falla, usa el agente ReAct por archivo como fallback.
-        Libera los paths reclamados al terminar.
+        Clasifica ambiguos en capas:
+        cache -> reglas con metadatos/contenido -> LLM individual o bulk -> fallback controlado.
+        Libera los paths reclamados al terminar cada archivo.
         """
         # --- Decision cache: apply hits immediately, send misses to LLM ---
         cache_hits = []
         cache_misses = []
         for f in files:
             cached = self._cache.get(f["filename"], f.get("extension") or "")
-            if cached is not None:
+            if cached is not None and not (is_document_extension(f.get("extension")) and self._is_varios_category(cached)):
                 cache_hits.append((f, cached))
                 metrics.inc(M_CACHE_HITS)
             else:
@@ -527,95 +941,73 @@ REGLAS DE OPERACION:
 
         if not cache_misses:
             return
-        files = cache_misses
-
-        if self.llm:
-            self._update_tray_progress(
-                tray,
-                f"LLM: clasificando {len(files)} ambiguos",
-                result,
-                base_processed_total,
-                base_errors_total,
-                pending=len(files),
-            )
-            classifications = self._classify_batch_with_llm(files)
-            if classifications is not None:
-                by_path = {c["filepath"]: c.get("category", "Varios") for c in classifications if "filepath" in c}
-                successful = 0
-                for f in files:
-                    filepath = f["filepath"]
-                    category = by_path.get(filepath, "Varios")
-                    try:
-                        self._apply_move(filepath, category, "llm_batch", "Clasificacion en lote por LLM.")
-                        self._cache.put(f["filename"], f.get("extension") or "", category, "llm_batch")
-                        result["processed"] += 1
-                        successful += 1
-                    except Exception as e:
-                        logger.error("Error aplicando movimiento de lote para %s: %s", f["filename"], e)
-                        self.db.update_file_status(filepath, "error")
-                        result["errors"] += 1
-                        self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e))
-                    finally:
-                        self._release_path(filepath)
-                self._update_tray_progress(
-                    tray,
-                    f"LLM: {successful}/{len(files)} clasificados",
-                    result,
-                    base_processed_total,
-                    base_errors_total,
-                    pending=0,
-                )
-                return
-            self._update_tray_progress(
-                tray,
-                f"LLM fallo; fallback para {len(files)} archivos",
-                result,
-                base_processed_total,
-                base_errors_total,
-                pending=len(files),
-            )
-
-        # Fallback: archivo por archivo con ReAct (o Varios si no hay LLM)
-        for f in files:
-            filepath = f["filepath"]
-            try:
-                if self.agent:
-                    status = self._process_file_with_agent(filepath, f["filename"])
-                    if status == "processed":
-                        result["processed"] += 1
-                    elif status == "skipped":
-                        pass  # rate limit — queda pending, no es error
-                    else:
-                        result["errors"] += 1
-                else:
-                    self._apply_move(filepath, "Varios", "system", "Sin agente LLM disponible.")
-                    result["processed"] += 1
-            except MoveFailureError as e:
-                logger.error("Movimiento fallido en fallback individual para %s: %s", f["filename"], e)
-                self.db.update_file_status(filepath, "error")
-                result["errors"] += 1
-                self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e))
-            except Exception as e:
-                logger.error("Error en fallback individual para %s: %s — moviendo a Varios.", f["filename"], e)
-                try:
-                    self._apply_move(filepath, "Varios", "system", f"Error LLM: {e}")
-                    result["processed"] += 1
-                except Exception as e2:
-                    logger.error("Fallback a Varios tambien fallo para %s: %s", f["filename"], e2)
-                    self.db.update_file_status(filepath, "error")
-                    result["errors"] += 1
-                    self._emit(FileState.ERROR, filepath, f["filename"], reason=str(e2))
-            finally:
-                self._release_path(filepath)
-
+        max_chars = self.llm_bulk_content_max_chars if prefer_bulk else self.llm_individual_content_max_chars
         self._update_tray_progress(
             tray,
-            f"Fallback: {len(files)} archivos revisados",
+            f"Analizando metadatos de {len(cache_misses)} ambiguos",
             result,
             base_processed_total,
             base_errors_total,
-            pending=0,
+            pending=len(cache_misses),
         )
+        file_infos = self._build_file_infos(cache_misses, max_chars=max_chars)
+
+        remaining = []
+        for info in file_infos:
+            filepath = info["filepath"]
+            handled = False
+            try:
+                decision = classify_file_context(
+                    info["filename"],
+                    info.get("extension"),
+                    info.get("metadata"),
+                    self.config,
+                    min_confidence=self.local_context_min_confidence,
+                )
+                if decision and not self._is_varios_category(decision.category):
+                    self._apply_move(
+                        filepath,
+                        decision.category,
+                        "metadata_rule",
+                        decision.reason,
+                        confidence=decision.confidence,
+                    )
+                    if self._should_cache_decision(decision.category, decision.confidence):
+                        self._cache.put(info["filename"], info.get("extension") or "", decision.category, "metadata_rule")
+                    result["processed"] += 1
+                    handled = True
+                else:
+                    remaining.append(info)
+            except Exception as e:
+                logger.error("Error aplicando regla con metadatos para %s: %s", info["filename"], e)
+                self.db.update_file_status(filepath, "error")
+                result["errors"] += 1
+                self._emit(FileState.ERROR, filepath, info["filename"], reason=str(e))
+                handled = True
+            finally:
+                if handled:
+                    self._release_path(filepath)
+
+        if not remaining:
+            self._update_tray_progress(
+                tray,
+                "Metadatos: todos clasificados",
+                result,
+                base_processed_total,
+                base_errors_total,
+                pending=0,
+            )
+            return
+
+        self._process_remaining_ambiguous(
+            remaining,
+            result,
+            tray=tray,
+            base_processed_total=base_processed_total,
+            base_errors_total=base_errors_total,
+            prefer_bulk=prefer_bulk,
+        )
+        return
 
     # ------------------------------------------------------------------ #
     # Control de concurrencia                                              #
@@ -652,7 +1044,7 @@ REGLAS DE OPERACION:
 
         logger.info("Orquestador detecto %s archivo(s) pendiente(s). Procesando...", len(pending_files))
 
-        # Fase 1: reglas deterministicas — sin API, rapido
+        # Fase 1: reglas deterministicas â€” sin API, rapido
         ambiguous = []
         with metrics.span(M_PHASE1_DURATION):
             for file_record in pending_files:
@@ -693,7 +1085,7 @@ REGLAS DE OPERACION:
             return result
 
         logger.info(
-            "%d archivo(s) ambiguo(s) → clasificacion por lote (chunks de %d).",
+            "%d archivo(s) ambiguo(s) â†’ clasificacion por lote (chunks de %d).",
             len(ambiguous),
             self.llm_batch_size,
         )
@@ -701,6 +1093,7 @@ REGLAS DE OPERACION:
         # Fases 2+3: lote LLM con fallback ReAct
         _phase23_start = __import__("time").perf_counter()
         _time = __import__("time")
+        prefer_bulk = len(ambiguous) > self.llm_individual_threshold
         for i in range(0, len(ambiguous), self.llm_batch_size):
             chunk = ambiguous[i : i + self.llm_batch_size]
             _chunk_processed_before = result["processed"]
@@ -711,6 +1104,7 @@ REGLAS DE OPERACION:
                 tray=tray,
                 base_processed_total=base_processed_total,
                 base_errors_total=base_errors_total,
+                prefer_bulk=prefer_bulk,
             )
             metrics.inc(M_FILES_PROCESSED, result["processed"] - _chunk_processed_before)
             metrics.inc(M_FILES_ERRORS, result["errors"] - _chunk_errors_before)

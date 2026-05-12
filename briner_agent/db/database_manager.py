@@ -288,6 +288,28 @@ class DatabaseManager:
             logger.error("Error al obtener metricas: %s", e)
             return {}
 
+    def get_recent_classification_decisions(self, limit: int = 200):
+        """Return recent successful move decisions to warm the in-memory decision cache."""
+        query = """
+        SELECT f.filename, f.extension, ce.category, ce.decision_source
+        FROM classification_events ce
+        JOIN files f ON f.id = ce.file_id
+        WHERE ce.action = 'move'
+          AND ce.category IS NOT NULL
+          AND ce.category != ''
+          AND COALESCE(ce.dry_run, 0) = 0
+          AND ce.decision_source IN ('rule', 'metadata_rule', 'llm_individual', 'llm_batch')
+        ORDER BY ce.timestamp DESC, ce.id DESC
+        LIMIT ?
+        """
+        try:
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                return [dict(row) for row in conn.execute(query, (limit,)).fetchall()]
+        except sqlite3.Error as e:
+            logger.error("Error al cargar decisiones recientes: %s", e)
+            return []
+
     def get_last_move_event(self):
         """Obtiene el ultimo movimiento real registrado para soportar undo."""
         query = """

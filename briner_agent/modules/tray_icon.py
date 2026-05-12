@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 from runtime.event_bus import FileEvent, FileState, bus
+from runtime.commands import enqueue_command
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class BrinerTrayIcon:
         self._pending_notifications: list[tuple[str, str]] = []
         self._recent_file_events: list[FileEvent] = []
         self._max_recent_events: int = 5
+        self._paused = False
         bus.subscribe(self._on_file_event)
 
     def update_stats(
@@ -193,7 +195,11 @@ class BrinerTrayIcon:
                 pystray.MenuItem("Abrir monitor en tiempo real", self._open_monitor),
                 pystray.MenuItem("Ver logs", self._open_logs),
                 pystray.MenuItem("Abrir carpeta monitoreada", self._open_workspace),
+                pystray.MenuItem("Abrir documentos por revisar", self._open_review_folder),
                 pystray.MenuItem("Forzar escaneo ahora", self._force_scan),
+                pystray.MenuItem("Cambiar carpeta...", self._change_workspace),
+                pystray.MenuItem("Pausar/Reanudar", self._toggle_pause),
+                pystray.MenuItem("Deshacer ultimo movimiento", self._undo_last),
                 pystray.MenuItem("Cambiar API key...", self._change_api_key),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Detener Briner", self._quit),
@@ -224,8 +230,55 @@ class BrinerTrayIcon:
         if self.workspace_dir.exists():
             os.startfile(str(self.workspace_dir))
 
+    def _open_review_folder(self, icon, item):
+        candidates = [
+            self.workspace_dir / "7. Varios" / "Documentos por Revisar",
+            self.workspace_dir / "Varios" / "Documentos por Revisar",
+        ]
+        target = next((path for path in candidates if path.exists()), candidates[0])
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(target))
+        except Exception as exc:
+            self._notify("Briner", f"No se pudo abrir revision: {exc}")
+
     def _force_scan(self, icon, item):
+        enqueue_command(self.appdata_dir, "force_scan")
         self.force_scan_event.set()
+
+    def _change_workspace(self, icon, item):
+        import subprocess
+        selected_path = str(self.workspace_dir).replace("'", "''")
+        ps_script = (
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$dialog.Description = 'Selecciona la carpeta que Briner debe organizar'; "
+            f"$dialog.SelectedPath = '{selected_path}'; "
+            "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { "
+            "Write-Output $dialog.SelectedPath }"
+        )
+        try:
+            result = subprocess.run(
+                ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
+                capture_output=True, text=True, timeout=120,
+            )
+            folder = result.stdout.strip()
+        except Exception as exc:
+            self._notify("Briner", f"No se pudo abrir selector de carpeta: {exc}")
+            return
+        if not folder:
+            return
+        enqueue_command(self.appdata_dir, "change_workspace", {"workspace_dir": folder})
+        self._notify("Briner", "Cambio de carpeta solicitado.")
+
+    def _toggle_pause(self, icon, item):
+        self._paused = not self._paused
+        enqueue_command(self.appdata_dir, "pause" if self._paused else "resume")
+        self._notify("Briner", "Organizacion pausada." if self._paused else "Organizacion reanudada.")
+
+    def _undo_last(self, icon, item):
+        enqueue_command(self.appdata_dir, "undo_last")
+        self._notify("Briner", "Deshacer solicitado.")
 
     def _change_api_key(self, icon, item):
         import subprocess
@@ -250,6 +303,7 @@ class BrinerTrayIcon:
         env_path = self.appdata_dir / ".env"
         try:
             env_path.write_text(f"GOOGLE_API_KEY={new_key}\n", encoding="utf-8")
+            enqueue_command(self.appdata_dir, "reload_api_key")
         except Exception as exc:
             logger.error("No se pudo guardar la API key: %s", exc)
             return

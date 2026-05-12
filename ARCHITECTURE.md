@@ -10,6 +10,21 @@ Briner es un agente autónomo de organización de archivos para Windows. Monitor
 
 ---
 
+## Estado actual v1.2.0
+
+La app esta orientada a usuarios finales: solo deben cambiar la carpeta monitoreada o la API key cuando sea necesario. El resto se maneja desde Briner Monitor o desde el icono de bandeja mediante comandos IPC:
+
+- Cambiar carpeta monitoreada sin editar JSON.
+- Cambiar API key y recargar Gemini sin reiniciar.
+- Pausar/reanudar procesamiento.
+- Forzar escaneo inmediato.
+- Deshacer el ultimo movimiento.
+- Abrir `7. Varios/Documentos por Revisar`.
+- Retirar basura a `_Briner Quarantine` sin borrado permanente.
+- Precargar cache de decisiones desde SQLite al arrancar.
+
+---
+
 ## Componentes del sistema
 
 El sistema se distribuye como tres ejecutables independientes que comparten un directorio de datos en `%APPDATA%\Briner\`:
@@ -101,6 +116,8 @@ Todos los archivos de estado se guardan aquí. Tanto `Briner.exe` como `BrinerBa
     └── briner.log          ← Log de actividad (INFO+)
 ```
 
+Desde v1.2.0 tambien existe `%APPDATA%\Briner\commands\`, una cola de comandos JSON usada por BrinerMonitor y la bandeja para pedir acciones al proceso background: cambiar carpeta, recargar API key, pausar/reanudar, forzar escaneo y deshacer ultimo movimiento. `.force_scan` queda como senal simple compatible para escaneos inmediatos.
+
 En modo dev (sin frozen), `APPDATA_DIR` apunta al propio directorio `briner_agent/` y la DB se ubica en `briner_agent/db/briner.db`.
 
 ---
@@ -149,7 +166,7 @@ La configuración se construye en dos capas que se fusionan:
 ### Capa 1: `config.yaml` (base, inmutable para el usuario)
 Empaquetado dentro del exe por PyInstaller (`datas=[('config.yaml', '.')]`). Contiene:
 - **`monitoring`**: `mode`, `poll_interval`, `recursive: false` (solo archivos en la raíz de la carpeta configurada, no en subcarpetas), `ignored_patterns`, `destination_aliases` (mapeo de categoría a nombre de carpeta con número).
-- **`processing`**: `max_files_per_cycle` (500), `llm_batch_size` (50), `llm_timeout_seconds` (60), `circuit_breaker_threshold` (3), `circuit_breaker_recovery_seconds` (60), `decision_cache_size` (200), `decision_cache_ttl_seconds` (3600).
+- **`processing`**: `max_files_per_cycle` (500), `llm_batch_size` (50), `llm_individual_threshold` (6), `llm_bulk_content_max_chars` (700), `llm_individual_content_max_chars` (3000), `varios_min_confidence` (0.82), `llm_timeout_seconds` (60), `circuit_breaker_threshold` (3), `circuit_breaker_recovery_seconds` (60), `decision_cache_size` (200), `decision_cache_ttl_seconds` (3600).
 - **`taxonomy`**: lista de reglas deterministas (categoría + extensiones / palabras clave).
 - **`llm`**: `model` (`gemini-2.5-flash`), `temperature` (0.2).
 
@@ -250,6 +267,16 @@ get_pending_files(limit=500)
          └─ Agente LangGraph ReAct, 1 archivo a la vez (último recurso)
 ```
 
+En v1.2.0 la fase de ambiguos usa capas adicionales:
+
+- Cache en memoria precargado desde SQLite con decisiones recientes.
+- `collect_file_metadata()` extrae tipo MIME, tamano, fechas, metadatos PDF/Office/imagen/ZIP y preview de contenido.
+- `classify_file_context()` intenta clasificar localmente con nombre + metadatos + contenido antes de llamar a Gemini.
+- Si hay pocos ambiguos (`llm_individual_threshold <= 6`), Gemini se consulta archivo por archivo con contexto amplio.
+- Si hay muchos ambiguos, Gemini se consulta en bulk con previews compactos.
+- `Varios` no se cachea y los documentos sin evidencia suficiente van a `Varios/Documentos por Revisar`.
+- Las herramientas LLM nunca borran permanentemente: `delete_file` mueve a `_Briner Quarantine`.
+
 ### Movimiento de archivos (`crud_executor.py`)
 
 - Resuelve el alias de categoría: `"Multimedia"` → `"4. Multimedia"` (según `destination_aliases` en config.yaml).
@@ -267,6 +294,13 @@ get_pending_files(limit=500)
 - **Consumidor:** BrinerBackground, que lo comprueba en cada iteración del sleep loop (cada 1 segundo en modo interval, cada iteración del loop en modo realtime).
 - **Efecto:** interrumpe el sleep de `poll_interval` y lanza un ciclo inmediato.
 - **Ruta:** `%APPDATA%\Briner\.force_scan`
+
+### Cola de comandos `commands/*.json`
+- **Creador:** BrinerMonitor y BrinerTrayIcon mediante `runtime.commands.enqueue_command()`.
+- **Consumidor:** `RuntimeCommandProcessor` en `main.py`.
+- **Comandos:** `force_scan`, `reload_api_key`, `change_workspace`, `pause`, `resume`, `undo_last`.
+- **Efecto:** permite que el usuario final controle Briner sin reiniciar y sin editar archivos manualmente.
+- **Ruta:** `%APPDATA%\Briner\commands\*.json`
 
 ### Base de datos SQLite (compartida)
 BrinerMonitor accede a la DB en modo solo lectura (`mode=ro` en la URI de conexión) para mostrar el estado. BrinerBackground tiene acceso de escritura.
@@ -299,6 +333,7 @@ Evita llamadas repetidas a la API para archivos con el mismo patrón de nombre.
 - **Clave:** `(extension, patrón_normalizado)` — los dígitos del nombre se normalizan a `#` para que `foto_001.jpg` y `foto_002.jpg` compartan la misma entrada.
 - **Capacidad:** 200 entradas (LRU — la menos usada se descarta).
 - **TTL:** 3600 segundos.
+- **Warm start:** al arrancar, el orquestador precarga decisiones recientes desde SQLite (`get_recent_classification_decisions`) y evita repetir llamadas LLM tras reinicios.
 - **Efecto:** clasificar 1000 fotos solo requiere 1 llamada LLM si todas tienen el mismo patrón de nombre.
 
 ---
@@ -380,20 +415,20 @@ Los tres specs de PyInstaller viven en `briner_agent/`:
 ### `BrinerMonitor.spec`
 - `console=False`
 - Sin LangChain ni LangGraph (excluidos explícitamente).
-- Solo necesita: `sqlite3`, `tkinter`, `pystray`, `PIL`.
+- Solo necesita: `sqlite3`, `tkinter`, `pystray`, `PIL` y `runtime.commands`.
 
 ### Comando de build
 ```powershell
 cd briner_agent
-python -m PyInstaller --clean --noconfirm BrinerBackground.spec
 python -m PyInstaller --clean --noconfirm Briner.spec
+python -m PyInstaller --clean --noconfirm BrinerBackground.spec
 python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
 ```
 O simplemente: `build_all.bat`
 
 ### Crear zip de release
 ```powershell
-Compress-Archive -Path "briner_agent\dist\Briner","briner_agent\dist\BrinerBackground","briner_agent\dist\BrinerMonitor","Install.bat" -DestinationPath "briner_vX.X.X.zip" -Force
+Compress-Archive -Path "briner_agent\dist\Briner","briner_agent\dist\BrinerBackground","briner_agent\dist\BrinerMonitor","Install.bat","README.md","MANUAL_USO.md" -DestinationPath "briner_v1.2.0.zip" -Force
 ```
 El zip coloca las 3 carpetas y `Install.bat` al mismo nivel raíz.
 
@@ -404,9 +439,7 @@ El zip coloca las 3 carpetas y `Install.bat` al mismo nivel raíz.
 ```powershell
 cd briner_agent
 python -m pytest tests/ -q
-# Resultado esperado: 41 passed, 1 failed
-# El fallo conocido: test_get_briner_data_dir_honors_override
-# (expanduser con home mock falla en Python 3.14 en Windows — bug de entorno, no de la app)
+# Resultado esperado v1.2.0: 50 passed
 ```
 
 ### Cobertura por archivo de test
@@ -440,7 +473,7 @@ python -m pytest tests/ -q
 |---|---|
 | 3 ejecutables separados | Briner.exe necesita consola para el setup interactivo; BrinerBackground necesita `console=False` para no flashear ventanas al arrancar con Windows; BrinerMonitor es puro UI sin dependencias de LangChain. |
 | LLM inicialización lazy | La bandeja del sistema aparece en < 2 s aunque la API no esté disponible. Un error de API key no impide arrancar. |
-| Sentinel file para IPC | Comunicación simple entre procesos sin sockets, sin HTTP, sin dependencias extras. Compatible con frozen exes. |
+| IPC por archivos | `.force_scan` se conserva para escaneo inmediato y `commands/*.json` permite comandos de usuario final sin sockets ni HTTP. Compatible con frozen exes. |
 | Catch-up mode | Con carpetas de 70k+ archivos, dormir 1 hora entre lotes tomaría semanas. El catch-up procesa de forma continua hasta quedar al día. |
 | 2s entre chunks LLM | La API gratuita de Gemini tiene límite de 15 req/min. Sin pausa, 3 fallos consecutivos abren el circuit breaker y bloquean la clasificación el resto del ciclo. |
 | Decision cache con normalización de dígitos | Fotos de WhatsApp siguen patrones como `IMG_001.jpg`, `IMG_002.jpg`. Normalizar los dígitos a `#` permite reusar decisiones entre miles de fotos similares. |

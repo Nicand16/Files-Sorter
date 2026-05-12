@@ -18,6 +18,8 @@ __pycache__/
 # PyInstaller build output (all artifacts)
 briner_agent/build/
 briner_agent/dist/
+release/
+briner_v*.zip
 
 # Runtime state (written to %APPDATA%\Briner when frozen)
 briner_agent/logs/
@@ -33,6 +35,7 @@ briner_agent/workspace/*
 briner_agent/.tmp_tests/
 
 # OS/editor noise
+.claude/
 Thumbs.db
 desktop.ini
 .DS_Store

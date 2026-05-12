@@ -19,7 +19,13 @@ def get_llm(config: dict):
         logger.warning("langchain_google_genai no esta instalado. Motor LLM deshabilitado.")
         return None
 
-    if not os.environ.get("GOOGLE_API_KEY") and not os.environ.get("GEMINI_API_KEY"):
+    google_key = os.environ.get("GOOGLE_API_KEY")
+    gemini_key = os.environ.get("GEMINI_API_KEY")
+    if not google_key and gemini_key:
+        os.environ["GOOGLE_API_KEY"] = gemini_key
+        google_key = gemini_key
+
+    if not google_key:
         logger.warning("Falta GOOGLE_API_KEY/GEMINI_API_KEY. Motor LLM deshabilitado.")
         return None
 

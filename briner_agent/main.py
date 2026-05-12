@@ -22,6 +22,8 @@ def get_briner_data_dir(*, is_frozen: bool, home: Path | None = None) -> Path:
     home_dir = Path.home() if home is None else Path(home)
     override = os.environ.get("BRINER_HOME")
     if override:
+        if override == "~" or override.startswith("~/") or override.startswith("~\\"):
+            return (home_dir / override[2:]).resolve()
         return Path(override).expanduser().resolve()
 
     if is_frozen:
@@ -41,9 +43,16 @@ APPDATA_DIR = get_briner_data_dir(is_frozen=IS_FROZEN)
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
-from core.settings_manager import load_or_create_user_settings, normalize_monitoring_config
+from core.settings_manager import (
+    load_or_create_user_settings,
+    load_user_settings,
+    normalize_monitoring_config,
+    save_user_settings,
+    validate_watch_directory,
+)
 from db.database_manager import DatabaseManager
 from modules.periodic_scanner import scan_directory_once
+from runtime.commands import iter_pending_commands, mark_command_done
 
 try:
     from dotenv import load_dotenv
@@ -64,17 +73,17 @@ logging.basicConfig(
 logger = logging.getLogger("BrinerMain")
 
 
-def load_environment():
+def load_environment(force: bool = False):
     env_logger = logging.getLogger("BrinerMain")
     # When frozen, check APPDATA first (shared between Briner and BrinerBackground), then next to the exe.
     env_paths = [APPDATA_DIR / ".env", APP_DIR / ".env"] if IS_FROZEN else [APP_DIR / ".env"]
 
     if load_dotenv:
         for ep in env_paths:
-            load_dotenv(ep, override=False)
-        load_dotenv()
+            load_dotenv(ep, override=force)
+        load_dotenv(override=force)
 
-    if os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"):
+    if not force and (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
         env_logger.info("Credenciales IA cargadas.")
         return
 
@@ -92,6 +101,8 @@ def load_environment():
                     raw_value = raw_value.strip().strip('"').strip("'")
                     if key in {"GOOGLE_API_KEY", "GEMINI_API_KEY"} and raw_value:
                         os.environ[key] = raw_value
+                        if key == "GEMINI_API_KEY":
+                            os.environ["GOOGLE_API_KEY"] = raw_value
                         env_logger.info("Credenciales IA cargadas manualmente desde .env en %s.", env_path.parent)
                         return
                     continue
@@ -186,7 +197,103 @@ def build_arg_parser():
     return parser
 
 
-def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, poll_interval: int, once: bool, stop_event=None, force_scan_event=None, tray=None):
+class RuntimeCommandProcessor:
+    """Consumes UI commands written by BrinerMonitor/Tray without requiring restarts."""
+
+    def __init__(
+        self,
+        *,
+        appdata_dir: Path,
+        settings_path: Path,
+        config: dict,
+        db_manager,
+        orchestrator,
+        workspace_dir: Path,
+        reset_llm_callback,
+    ):
+        self.appdata_dir = Path(appdata_dir)
+        self.settings_path = Path(settings_path)
+        self.config = config
+        self.db = db_manager
+        self.orchestrator = orchestrator
+        self.workspace_dir = Path(workspace_dir).resolve()
+        self.reset_llm_callback = reset_llm_callback
+        self.paused = False
+
+    def _notify(self, tray, title: str, message: str):
+        logger.info("%s: %s", title, message)
+        if tray and hasattr(tray, "_notify"):
+            tray._notify(title, message)
+
+    def _set_workspace(self, raw_path: str, tray=None) -> bool:
+        workspace = Path(validate_watch_directory(raw_path)).resolve()
+        user_settings = load_user_settings(self.settings_path)
+        monitoring = user_settings.setdefault("monitoring", {})
+        monitoring["workspace_dir"] = str(workspace)
+        monitoring.setdefault("mode", self.config.get("monitoring", {}).get("mode", "interval"))
+        monitoring.setdefault("poll_interval", self.config.get("monitoring", {}).get("poll_interval", 3600))
+        monitoring.setdefault("dry_run", self.config.get("monitoring", {}).get("dry_run", False))
+        if not save_user_settings(self.settings_path, user_settings):
+            raise RuntimeError("No se pudo guardar la nueva carpeta monitoreada.")
+
+        self.workspace_dir = workspace
+        self.config.setdefault("monitoring", {})["workspace_dir"] = str(workspace)
+        self.orchestrator.workspace_root = workspace
+        self.orchestrator.config.setdefault("monitoring", {})["workspace_dir"] = str(workspace)
+        self.db.cleanup_pending_outside_scan_scope(
+            workspace,
+            recursive=self.config.get("monitoring", {}).get("recursive", False),
+        )
+        if tray and hasattr(tray, "workspace_dir"):
+            tray.workspace_dir = workspace
+        self.paused = False
+        return True
+
+    def process_pending(self, tray=None) -> dict:
+        result = {"force_scan": False, "workspace_changed": False}
+        for path, command in iter_pending_commands(self.appdata_dir):
+            try:
+                command_type = command.get("type")
+                payload = command.get("payload") or {}
+                if command_type == "force_scan":
+                    result["force_scan"] = True
+                elif command_type == "reload_api_key":
+                    load_environment(force=True)
+                    self.reset_llm_callback()
+                    if tray and hasattr(tray, "clear_error"):
+                        tray.clear_error()
+                    self._notify(tray, "Briner", "API key actualizada.")
+                    result["force_scan"] = True
+                elif command_type == "change_workspace":
+                    self._set_workspace(payload.get("workspace_dir", ""), tray=tray)
+                    self._notify(tray, "Briner", f"Carpeta monitoreada actualizada: {self.workspace_dir}")
+                    result["workspace_changed"] = True
+                    result["force_scan"] = True
+                elif command_type == "pause":
+                    self.paused = True
+                    self._notify(tray, "Briner", "Organizacion pausada.")
+                elif command_type == "resume":
+                    self.paused = False
+                    self._notify(tray, "Briner", "Organizacion reanudada.")
+                    result["force_scan"] = True
+                elif command_type == "undo_last":
+                    from modules.history import undo_last_move
+
+                    message = undo_last_move(self.db, self.workspace_dir, dry_run=self.config.get("monitoring", {}).get("dry_run", False))
+                    self._notify(tray, "Briner - Deshacer", message)
+                    result["force_scan"] = True
+                else:
+                    logger.warning("Comando desconocido ignorado: %s", command_type)
+            except Exception as exc:
+                logger.exception("Error procesando comando %s: %s", command.get("type"), exc)
+                if tray and hasattr(tray, "set_error"):
+                    tray.set_error(f"Error procesando comando {command.get('type')}: {exc}", notify=True)
+            finally:
+                mark_command_done(path)
+        return result
+
+
+def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, poll_interval: int, once: bool, stop_event=None, force_scan_event=None, tray=None, command_processor: RuntimeCommandProcessor | None = None):
     logger.info("Modo interval: ejecutando escaneo inicial inmediato.")
     processed_total = 0
     errors_total = 0
@@ -195,6 +302,17 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
     while True:
         if stop_event and stop_event.is_set():
             break
+
+        if command_processor:
+            command_result = command_processor.process_pending(tray)
+            workspace_dir = command_processor.workspace_dir
+            if command_result.get("workspace_changed"):
+                needs_scan = True
+            if command_processor.paused:
+                if tray:
+                    tray.update_stats(status="Pausado", pending=0, processed_total=processed_total, errors_total=errors_total)
+                time.sleep(1)
+                continue
 
         if needs_scan:
             if tray:
@@ -268,6 +386,12 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
             while time.monotonic() < _catchup_deadline:
                 if stop_event and (stop_event.is_set() or (force_scan_event and force_scan_event.is_set())):
                     break
+                if command_processor:
+                    command_result = command_processor.process_pending(tray)
+                    workspace_dir = command_processor.workspace_dir
+                    if command_result.get("force_scan") or command_result.get("workspace_changed") or command_processor.paused:
+                        needs_scan = True
+                        break
                 if _sentinel.exists():
                     try:
                         _sentinel.unlink()
@@ -283,8 +407,13 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
             deadline = time.monotonic() + poll_interval
             _sentinel = APPDATA_DIR / ".force_scan"
             while time.monotonic() < deadline:
-                if stop_event and (stop_event.is_set() or force_scan_event.is_set()):
+                if stop_event and (stop_event.is_set() or (force_scan_event and force_scan_event.is_set())):
                     break
+                if command_processor:
+                    command_result = command_processor.process_pending(tray)
+                    workspace_dir = command_processor.workspace_dir
+                    if command_result.get("force_scan") or command_result.get("workspace_changed") or command_processor.paused:
+                        break
                 if _sentinel.exists():
                     try:
                         _sentinel.unlink()
@@ -299,7 +428,7 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
                 break
 
 
-def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, once: bool, stop_event=None, tray=None):
+def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: dict, once: bool, stop_event=None, tray=None, command_processor: RuntimeCommandProcessor | None = None):
     from modules.file_watcher import DirectoryMonitor
 
     monitor = DirectoryMonitor(watch_directory=str(workspace_dir), db_manager=db_manager, config=config)
@@ -318,6 +447,21 @@ def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: di
     _rt_sentinel = APPDATA_DIR / ".force_scan"
     try:
         while not (stop_event and stop_event.is_set()):
+            if command_processor:
+                command_result = command_processor.process_pending(tray)
+                if command_result.get("workspace_changed"):
+                    monitor.stop()
+                    workspace_dir = command_processor.workspace_dir
+                    monitor = DirectoryMonitor(watch_directory=str(workspace_dir), db_manager=db_manager, config=config)
+                    monitor.scan_existing_files()
+                    monitor.start()
+                if command_result.get("force_scan"):
+                    scan_directory_once(command_processor.workspace_dir, db_manager, config)
+                if command_processor.paused:
+                    if tray:
+                        tray.update_stats(status="Pausado", processed_total=processed_total, errors_total=errors_total)
+                    time.sleep(1)
+                    continue
             if _rt_sentinel.exists():
                 try:
                     _rt_sentinel.unlink()
@@ -502,17 +646,36 @@ def main():
     stop_event = threading.Event()
     force_scan_event = threading.Event()
 
+    def _reset_llm():
+        with orchestrator._llm_init_lock:
+            orchestrator._llm_initialized = False
+            orchestrator._llm_obj = None
+            orchestrator.agent = None
+        orchestrator._circuit.record_success()
+        logger.info("LLM reiniciado tras cambio de API key.")
+
+    command_processor = RuntimeCommandProcessor(
+        appdata_dir=APPDATA_DIR,
+        settings_path=settings_path,
+        config=config,
+        db_manager=db_manager,
+        orchestrator=orchestrator,
+        workspace_dir=workspace_dir,
+        reset_llm_callback=_reset_llm,
+    )
+
     if args.once:
         # --once: no tray, direct single-pass processing
-        _run_startup_checks(workspace_dir, orchestrator)
+        if not _run_startup_checks(workspace_dir, orchestrator):
+            return
         try:
             if mode == "realtime":
                 _run_realtime_loop(orchestrator, db_manager, workspace_dir, config,
-                                   once=True, stop_event=stop_event)
+                                   once=True, stop_event=stop_event, command_processor=command_processor)
             else:
                 _run_interval_loop(orchestrator, db_manager, workspace_dir, config,
                                    poll_interval, once=True, stop_event=stop_event,
-                                   force_scan_event=force_scan_event)
+                                   force_scan_event=force_scan_event, command_processor=command_processor)
         except KeyboardInterrupt:
             logger.info("Briner se ha detenido correctamente por orden del usuario.")
         return
@@ -522,14 +685,6 @@ def main():
     tray = None
     try:
         from modules.tray_icon import BrinerTrayIcon
-
-        def _reset_llm():
-            with orchestrator._llm_init_lock:
-                orchestrator._llm_initialized = False
-                orchestrator._llm_obj = None
-                orchestrator.agent = None
-            orchestrator._circuit.record_success()
-            logger.info("LLM reiniciado tras cambio de API key.")
 
         tray = BrinerTrayIcon(
             workspace_dir=workspace_dir,
@@ -543,17 +698,22 @@ def main():
         logger.warning("No se pudo crear el icono de bandeja del sistema: %s", exc)
         tray = None
 
-    _run_startup_checks(workspace_dir, orchestrator, tray=tray)
+    startup_ok = _run_startup_checks(workspace_dir, orchestrator, tray=tray)
+    if not startup_ok and not workspace_dir.exists():
+        command_processor.paused = True
+        logger.warning("Procesamiento pausado hasta que el usuario configure una carpeta valida.")
 
     def _bg_loop():
         try:
             if mode == "realtime":
                 _run_realtime_loop(orchestrator, db_manager, workspace_dir, config,
-                                   once=False, stop_event=stop_event, tray=tray)
+                                   once=False, stop_event=stop_event, tray=tray,
+                                   command_processor=command_processor)
             else:
                 _run_interval_loop(orchestrator, db_manager, workspace_dir, config,
                                    poll_interval, once=False, stop_event=stop_event,
-                                   force_scan_event=force_scan_event, tray=tray)
+                                   force_scan_event=force_scan_event, tray=tray,
+                                   command_processor=command_processor)
         except Exception as exc:
             logger.exception("Error fatal en loop de procesamiento: %s", exc)
             stop_event.set()

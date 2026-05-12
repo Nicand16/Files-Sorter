@@ -2,6 +2,7 @@
 import os
 import shutil
 import threading
+import time
 from pathlib import Path
 
 from langchain_core.tools import tool
@@ -178,21 +179,67 @@ def build_move_file_tool(
     return move_file
 
 
-@tool
-def delete_file(file_path: str) -> str:
-    """
-    Elimina permanentemente un archivo del sistema.
-    Usar exclusivamente para borrar archivos basura, temporales o inutiles.
-    """
+def quarantine_file_secure(
+    file_path: str,
+    workspace_root: str | Path,
+    dry_run: bool = False,
+) -> dict:
+    """Move a file to a quarantine folder under the workspace instead of deleting it."""
     try:
         path = Path(file_path)
-        if path.exists() and path.is_file():
-            path.unlink()
-            logger.info("Accion (delete_file): %s eliminado.", path.name)
-            return "Exito: Archivo eliminado del sistema."
-        return "Error: El archivo no fue encontrado o es una carpeta."
+        if not path.exists():
+            return {"ok": False, "message": f"Error: El archivo {file_path} no existe en el disco."}
+        if not path.is_file():
+            return {"ok": False, "message": "Error: La ruta origen no es un archivo."}
+
+        workspace = Path(workspace_root).resolve()
+        source_resolved = path.resolve()
+        if not _resolve_inside_workspace(source_resolved, workspace):
+            message = _workspace_mismatch_message(file_path, source_resolved, workspace_root, workspace)
+            logger.error(message)
+            return {"ok": False, "error_code": "workspace_mismatch", "message": message}
+
+        quarantine_dir = workspace / "_Briner Quarantine" / time.strftime("%Y-%m")
+        dest_path = _unique_destination(quarantine_dir / path.name)
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "old_path": str(source_resolved),
+                "new_path": str(dest_path),
+                "message": f"Dry-run: {path.name} se moveria a cuarentena en {dest_path}",
+            }
+
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(dest_path))
+        logger.info("Accion (quarantine_file): %s movido a cuarentena.", path.name)
+        return {
+            "ok": True,
+            "dry_run": False,
+            "old_path": str(source_resolved),
+            "new_path": str(dest_path.resolve()),
+            "message": f"Exito: Archivo movido a cuarentena en {dest_path}",
+        }
     except Exception as e:
-        return f"Error al eliminar: {str(e)}"
+        logger.error("Error en quarantine_file: %s", e)
+        return {"ok": False, "message": f"Error al mover a cuarentena: {str(e)}"}
+
+
+def build_delete_file_tool(
+    workspace_root: str | Path = ".",
+    dry_run: bool = False,
+):
+    @tool
+    def delete_file(file_path: str) -> str:
+        """
+        Mueve un archivo basura o temporal a _Briner Quarantine.
+        No elimina permanentemente archivos del usuario.
+        """
+        result = quarantine_file_secure(file_path, workspace_root, dry_run)
+        _record_thread_move(result)
+        return result["message"]
+
+    return delete_file
 
 
 def get_crud_tools(
@@ -201,4 +248,7 @@ def get_crud_tools(
     destination_aliases: dict | None = None,
 ):
     """Retorna la lista de herramientas CRUD para LangChain."""
-    return [build_move_file_tool(workspace_root, dry_run, destination_aliases), delete_file]
+    return [
+        build_move_file_tool(workspace_root, dry_run, destination_aliases),
+        build_delete_file_tool(workspace_root, dry_run),
+    ]

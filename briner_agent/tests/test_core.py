@@ -10,10 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from modules.crud_executor import move_file_secure
-from modules.multimodal_parser import extract_document_content
+from modules.crud_executor import move_file_secure, quarantine_file_secure
+from modules.file_watcher import BrinerEventHandler
+from modules.multimodal_parser import collect_file_metadata, extract_document_content
 from modules.periodic_scanner import scan_directory_once
-from modules.rules_engine import classify_file
+from modules.rules_engine import classify_file, classify_file_context
+from runtime.commands import enqueue_command, iter_pending_commands, mark_command_done
 from core.settings_manager import validate_poll_interval, validate_watch_directory
 from db.database_manager import DatabaseManager
 from main import _run_interval_loop, get_briner_data_dir
@@ -36,6 +38,37 @@ class RulesEngineTests(unittest.TestCase):
 
     def test_generic_pdf_is_ambiguous_by_default(self):
         self.assertIsNone(classify_file("unknown.pdf", ".pdf", {"rules": {}}))
+
+    def test_normalizes_accents_and_separators(self):
+        decision = classify_file("Producción_Textual-01.pdf", ".pdf", {})
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.category, "Universidad y Estudio/Actividades y Tareas")
+
+    def test_scores_all_categories_before_choosing(self):
+        config = {
+            "taxonomy": {
+                "categories": [
+                    {"category": "Academico", "keywords": ["certificado"]},
+                    {"category": "Salud", "keywords": ["certificado", "eps"]},
+                ]
+            }
+        }
+
+        decision = classify_file("certificado EPS.pdf", ".pdf", config)
+
+        self.assertEqual(decision.category, "Salud")
+
+    def test_classifies_from_document_context(self):
+        metadata = {
+            "document_metadata": {"title": "Recibo de matricula"},
+            "content_preview": "Universidad - pago de matricula periodo 2026",
+        }
+
+        decision = classify_file_context("documento.pdf", ".pdf", metadata, {}, min_confidence=0.84)
+
+        self.assertIsNotNone(decision)
+        self.assertEqual(decision.category, "Universidad y Estudio/Tramites Academicos")
 
 
 class MoveFileTests(unittest.TestCase):
@@ -95,6 +128,19 @@ class MoveFileTests(unittest.TestCase):
             self.assertTrue(result["ok"])
             self.assertIn("1. Universidad y Estudio", result["new_path"])
 
+    def test_quarantine_does_not_delete_permanently(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            source = workspace / "desktop.ini"
+            source.write_text("ignored", encoding="utf-8")
+
+            result = quarantine_file_secure(str(source), workspace)
+
+            self.assertTrue(result["ok"])
+            self.assertFalse(source.exists())
+            self.assertIn("_Briner Quarantine", result["new_path"])
+            self.assertTrue(Path(result["new_path"]).exists())
+
 
 class SettingsTests(unittest.TestCase):
     def test_rejects_poll_interval_under_minimum(self):
@@ -123,7 +169,7 @@ class SettingsTests(unittest.TestCase):
         with patch.dict("main.os.environ", {"BRINER_HOME": "~/custom_briner"}, clear=True):
             data_dir = get_briner_data_dir(is_frozen=True, home=Path("/home/tester"))
 
-        self.assertEqual(data_dir, Path("~/custom_briner").expanduser().resolve())
+        self.assertEqual(data_dir, Path("/home/tester/custom_briner").resolve())
 
 class FakeDb:
     def __init__(self):
@@ -170,6 +216,48 @@ class PeriodicScannerTests(unittest.TestCase):
 
             self.assertEqual(count, 1)
             self.assertEqual(db.registered[0][0], "new.pdf")
+
+    def test_file_watcher_ignores_destination_alias_roots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            organized = root / "1. Universidad y Estudio" / "Actividades y Tareas"
+            organized.mkdir(parents=True)
+            path = organized / "old.pdf"
+            path.write_text("old", encoding="utf-8")
+
+            handler = BrinerEventHandler(
+                FakeDb(),
+                root,
+                {
+                    "monitoring": {
+                        "destination_aliases": {"Universidad y Estudio": "1. Universidad y Estudio"},
+                    },
+                    "taxonomy": {
+                        "categories": [
+                            {"category": "Universidad y Estudio/Actividades y Tareas"},
+                        ]
+                    },
+                },
+            )
+
+            self.assertTrue(handler._is_inside_category(path))
+
+
+class CommandQueueTests(unittest.TestCase):
+    def test_enqueue_and_mark_command_done(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            appdata = Path(temp_dir)
+
+            command_path = enqueue_command(appdata, "force_scan", {"now": True})
+            pending = iter_pending_commands(appdata)
+
+            self.assertTrue(command_path.exists())
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0][1]["type"], "force_scan")
+            self.assertEqual(pending[0][1]["payload"]["now"], True)
+
+            mark_command_done(command_path)
+            self.assertEqual(iter_pending_commands(appdata), [])
 
 
 class IntervalLoopTests(unittest.TestCase):
@@ -218,6 +306,18 @@ class ParserTests(unittest.TestCase):
 
             self.assertIn("Hello from docx", content)
 
+    def test_collect_file_metadata_includes_text_preview(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "notes.txt"
+            path.write_text("matricula universidad pago", encoding="utf-8")
+
+            metadata = collect_file_metadata(str(path), max_chars=80)
+
+            self.assertEqual(metadata["type_group"], "document")
+            self.assertEqual(metadata["extension"], ".txt")
+            self.assertIn("content_preview", metadata)
+            self.assertIn("matricula universidad", metadata["content_preview"])
+
 
 class SchemaTests(unittest.TestCase):
     def test_schema_creates_classification_events(self):
@@ -258,6 +358,29 @@ class DatabaseRetryTests(unittest.TestCase):
 
             self.assertEqual(row["status"], "error")
             self.assertEqual(row["retry_count"], 3)
+
+    def test_recent_classification_decisions_feed_cache(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "briner.db"
+            db = DatabaseManager(str(db_path))
+            filepath = str((Path(temp_dir) / "file.pdf").resolve())
+
+            self.assertTrue(db.register_file("file.pdf", filepath, ".pdf", 5, 1.0))
+            db.log_classification_event(
+                filepath=filepath,
+                decision_source="llm_batch",
+                action="move",
+                old_path=filepath,
+                new_path=filepath,
+                category="Universidad y Estudio/Actividades y Tareas",
+                dry_run=False,
+            )
+
+            decisions = db.get_recent_classification_decisions(limit=10)
+
+            self.assertEqual(len(decisions), 1)
+            self.assertEqual(decisions[0]["filename"], "file.pdf")
+            self.assertEqual(decisions[0]["category"], "Universidad y Estudio/Actividades y Tareas")
 
 
 if __name__ == "__main__":

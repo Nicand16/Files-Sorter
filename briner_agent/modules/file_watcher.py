@@ -30,11 +30,17 @@ class BrinerEventHandler(FileSystemEventHandler):
 
     def _build_category_roots(self) -> set[Path]:
         roots = set()
+        aliases = self.config.get("monitoring", {}).get("destination_aliases", {})
+        for real_root in aliases.values():
+            roots.add((self.watch_directory / real_root).resolve())
         for rule in self.config.get("taxonomy", {}).get("categories", []):
             category = rule.get("category")
             if category:
-                roots.add((self.watch_directory / category).resolve())
+                logical_root = category.split("/")[0]
+                if logical_root not in aliases:
+                    roots.add((self.watch_directory / logical_root).resolve())
         roots.add((self.watch_directory / "Varios").resolve())
+        roots.add((self.watch_directory / "_Briner Quarantine").resolve())
         return roots
 
     def _is_ignored_filename(self, filepath: str | Path) -> bool:

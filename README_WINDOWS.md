@@ -1,10 +1,8 @@
-# Briner en Windows
+# Briner en Windows - Desarrollo y Build
 
-Briner organiza archivos por escaneo periodico. El modo recomendado es `interval`, porque no mantiene un watcher en tiempo real y consume menos recursos.
+Esta guia es para desarrollo local. Para usuarios finales usa `briner_v1.2.0.zip` y `Install.bat`.
 
-## 1. Instalar dependencias
-
-Desde la raiz del proyecto:
+## Entorno
 
 ```powershell
 cd "C:\ruta\a\Files Sorter"
@@ -14,109 +12,86 @@ python -m pip install --upgrade pip
 python -m pip install -r briner_agent\requirements.txt
 ```
 
-## 2. Configuracion inicial
-
-Ejecuta:
+## Ejecutar Desde Codigo Fuente
 
 ```powershell
-python briner_agent\main.py --setup
+cd briner_agent
+python main.py --setup
+python main.py --once
+python main.py
 ```
 
-En la primera ejecucion Briner pedira:
-
-- Carpeta a organizar, por ejemplo `C:\Users\tu_usuario\Downloads`.
-- Intervalo de escaneo en segundos, minimo `10`, recomendado `3600` para revisar cada hora.
-- Si `dry_run` queda activo.
-
-La configuracion se guarda en `briner_agent\user_settings.json`. En ejecuciones siguientes no vuelve a preguntar.
-
-## 3. Ejecutar en modo interval
-
-Una sola pasada:
+Comandos utiles:
 
 ```powershell
-python briner_agent\main.py --once
+python main.py --metrics
+python main.py --undo-last
+python main.py --once --dry-run
 ```
 
-Servicio continuo por escaneo periodico:
+## Tests
 
 ```powershell
-python briner_agent\main.py
+cd briner_agent
+python -m pytest tests/ -q
 ```
 
-Simulacion sin mover archivos:
+Resultado esperado para esta release:
+
+```text
+50 passed
+```
+
+## Build de Ejecutables
+
+Desde `briner_agent`:
 
 ```powershell
-python briner_agent\main.py --dry-run
+python -m PyInstaller --clean --noconfirm Briner.spec
+python -m PyInstaller --clean --noconfirm BrinerBackground.spec
+python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
 ```
 
-Metricas:
-
-```powershell
-python briner_agent\main.py --metrics
-```
-
-## 4. Modo realtime opcional
-
-Edita `briner_agent\user_settings.json` o `briner_agent\config.yaml`:
-
-```json
-{
-  "monitoring": {
-    "mode": "realtime"
-  }
-}
-```
-
-El modo realtime usa `watchdog`. El modo predeterminado sigue siendo `interval`.
-
-## 5. Generar EXE con PyInstaller
-
-Recomendado `--onedir`, porque facilita editar `config.yaml` y conservar `db\schema.sql` junto al ejecutable:
-
-```powershell
-cd "C:\ruta\a\Files Sorter\briner_agent"
-python -m PyInstaller --onedir --name Briner --add-data "config.yaml;." --add-data "db\schema.sql;db" main.py
-```
-
-El ejecutable quedara en:
+Artefactos esperados:
 
 ```text
 briner_agent\dist\Briner\Briner.exe
+briner_agent\dist\BrinerBackground\BrinerBackground.exe
+briner_agent\dist\BrinerMonitor\BrinerMonitor.exe
 ```
 
-Antes de instalar autoarranque, ejecuta una vez:
+`Briner.exe` tiene consola para setup/diagnostico. `BrinerBackground.exe` corre sin consola. `BrinerMonitor.exe` es la UI para usuarios.
+
+## Crear Release ZIP
+
+Desde la raiz del repo:
 
 ```powershell
-briner_agent\dist\Briner\Briner.exe --setup
+New-Item -ItemType Directory -Force release\briner_v1.2.0 | Out-Null
+Copy-Item -Recurse -Force briner_agent\dist\Briner,briner_agent\dist\BrinerBackground,briner_agent\dist\BrinerMonitor release\briner_v1.2.0\
+Copy-Item -Force Install.bat,README.md,README_WINDOWS.md,MANUAL_USO.md release\briner_v1.2.0\
+Compress-Archive -Path "release\briner_v1.2.0\*" -DestinationPath "briner_v1.2.0.zip" -Force
 ```
 
-## 6. Autoarranque al iniciar Windows
-
-### Opcion A: Startup folder
-
-Ejecuta:
+Validacion minima:
 
 ```powershell
-briner_agent\scripts\install_startup.bat
+Test-Path .\briner_v1.2.0.zip
+Test-Path .\briner_agent\dist\Briner\Briner.exe
+Test-Path .\briner_agent\dist\BrinerBackground\BrinerBackground.exe
+Test-Path .\briner_agent\dist\BrinerMonitor\BrinerMonitor.exe
+tar -tf .\briner_v1.2.0.zip | Select-String "README.md|README_WINDOWS.md|MANUAL_USO.md|Install.bat"
 ```
 
-Tambien puedes pasar una ruta explicita:
+## Notas de Runtime
 
-```powershell
-briner_agent\scripts\install_startup.bat "C:\ruta\a\Briner.exe"
-```
+- Configuracion del usuario: `%APPDATA%\Briner\user_settings.json`.
+- API key: `%APPDATA%\Briner\.env`.
+- Historial: `%APPDATA%\Briner\briner.db`.
+- Logs: `%APPDATA%\Briner\logs\briner.log`.
+- IPC Monitor/Tray/Background: `%APPDATA%\Briner\commands\*.json`.
+- Escaneo inmediato legacy: `%APPDATA%\Briner\.force_scan`.
 
-Esto crea un acceso directo en la carpeta `shell:startup` del usuario actual.
+## Modo Realtime Opcional
 
-### Opcion B: Task Scheduler recomendado
-
-1. Abre Task Scheduler.
-2. Create Task.
-3. Trigger: `At log on`.
-4. Marca `Delay task for: 30 seconds`.
-5. Action: `Start a program`.
-6. Program: ruta a `Briner.exe`.
-7. Start in: carpeta donde esta `Briner.exe`, por ejemplo `...\dist\Briner`.
-
-Task Scheduler es preferible si quieres retraso, reintentos o ejecucion aunque el inicio sea lento.
+El modo recomendado para usuarios finales es `interval`. Si necesitas realtime para pruebas, cambia `monitoring.mode` a `realtime` en config o settings.

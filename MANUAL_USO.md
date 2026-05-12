@@ -1,226 +1,198 @@
-# Briner — Manual de uso
+# Briner - Manual de uso
 
-Briner organiza automáticamente los archivos de cualquier carpeta (típicamente Descargas). Se ejecuta silenciosamente en segundo plano, clasifica cada archivo usando reglas locales y/o inteligencia artificial (Google Gemini), y los mueve a subcarpetas ordenadas.
+Briner organiza automaticamente los archivos de una carpeta elegida por el usuario. La instalacion normal no requiere Python ni comandos: solo extraer el zip, ejecutar `Install.bat`, elegir carpeta y pegar la API key de Gemini.
 
----
+Version: `1.2.0`.
 
-## Instalación
+## Instalacion
 
 ### Requisitos
-- Windows 10 u 11
-- API key de Google Gemini (gratuita en [aistudio.google.com/apikey](https://aistudio.google.com/apikey))
-- No se necesita Python ni ninguna dependencia adicional
+
+- Windows 10 u 11.
+- API key gratuita de Google Gemini: <https://aistudio.google.com/apikey>.
+- El zip de release completo: `briner_v1.2.0.zip`.
 
 ### Pasos
-1. Descarga `briner_v1.1.0.zip` desde la sección [Releases](https://github.com/Nicand16/Files-Sorter/releases) de GitHub y extrae **todos** los archivos en una carpeta.
-2. Haz doble clic en **`Install.bat`**.
-3. Selecciona la carpeta que deseas organizar en el diálogo que aparece (ej. `C:\Users\tu_usuario\Downloads`).
-4. Pega tu API key de Google Gemini cuando se te solicite.
-5. Listo. Briner arranca de inmediato y se configurará para iniciarse automáticamente con Windows.
 
-> **Importante:** extrae el zip antes de ejecutar `Install.bat`. No lo abras desde dentro del zip sin extraer.
+1. Extrae el zip completo en una carpeta.
+2. Ejecuta `Install.bat`.
+3. Selecciona la carpeta que quieres organizar, por ejemplo `Downloads`.
+4. Pega tu API key de Gemini.
+5. Briner arranca en segundo plano, crea el acceso directo de inicio con Windows y abre Briner Monitor.
 
----
+Importante: no ejecutes `Install.bat` dentro del zip sin extraer.
 
-## Qué hace Briner tras la instalación
+## Uso Diario
 
-### Primer arranque
+Briner se maneja desde dos lugares:
 
-Al iniciar por primera vez sobre una carpeta con muchos archivos, Briner:
+- Icono de bandeja: circulo de color junto al reloj de Windows.
+- Briner Monitor: ventana con historial, estado y controles.
 
-1. **Escanea** todos los archivos de la carpeta y los registra en su base de datos como "pendientes". El contador de pendientes en el monitor crece durante esta fase.
-2. **Procesa** los archivos por lotes de hasta 500 a la vez, moviéndolos a sus carpetas correspondientes.
-3. **Continúa** procesando el siguiente lote inmediatamente (modo "ponerse al día") hasta que no quede ningún archivo pendiente.
-4. Una vez al día procesados, espera 1 hora y repite el escaneo para detectar archivos nuevos.
+No es necesario editar `config.yaml`, `.env` ni `user_settings.json` para uso normal.
 
-### Uso continuo
+## Que Hace Automaticamente
 
-Cada hora Briner escanea la carpeta raíz (no las subcarpetas de destino), detecta archivos nuevos y los clasifica. Los archivos ya organizados no se tocan.
+1. Escanea la carpeta monitoreada.
+2. Ignora archivos temporales y carpetas ya organizadas.
+3. Clasifica por reglas locales cuando hay evidencia clara.
+4. Si hay pocos archivos ambiguos, consulta Gemini individualmente con mas contexto.
+5. Si hay muchos archivos ambiguos, hace peticiones bulk para reducir costo y cuota.
+6. Usa metadatos y contenido parcial de documentos cuando es posible.
+7. Mueve archivos a carpetas numeradas.
+8. Aprende de decisiones recientes guardadas en SQLite para evitar llamadas repetidas.
 
----
+## Carpetas Creadas
 
-## Carpetas de destino
-
-Briner crea estas subcarpetas dentro de la carpeta que configuraste:
-
-| Carpeta | Qué contiene |
+| Carpeta | Uso |
 |---|---|
-| `1. Universidad y Estudio` | Tareas, libros, módulos, trámites académicos |
-| `2. Software y Herramientas` | Instaladores (`.exe`, `.msi`), portátiles, comprimidos |
-| `3. Juegos y Emulación` | ROMs, ISOs, torrents de juegos, emuladores |
-| `4. Multimedia` | Imágenes, videos, audio |
-| `5. Trabajo y Empleo` | CVs, contratos, ofertas laborales |
-| `6. Documentos Personales` | Cédula, RUT, facturas, certificados, recibos |
-| `7. Varios` | Todo lo que no encaja en otra categoría |
+| `1. Universidad y Estudio` | Tareas, modulos, libros, tramites academicos |
+| `2. Software y Herramientas` | Instaladores, comprimidos, herramientas |
+| `3. Juegos y Emulacion` | ROMs, ISOs, torrents, emuladores |
+| `4. Multimedia` | Imagenes, videos y audio |
+| `5. Trabajo y Empleo` | CVs, contratos, ofertas y procesos laborales |
+| `6. Documentos Personales` | Identificacion, impuestos, salud y finanzas |
+| `7. Varios\Documentos por Revisar` | Documentos sin evidencia suficiente |
+| `_Briner Quarantine` | Archivos basura o temporales retirados sin borrado permanente |
 
----
+## Seguridad de Archivos
 
-## Cómo se clasifican los archivos
+Briner no borra archivos permanentemente. La herramienta interna `delete_file` fue reemplazada por cuarentena:
 
-Briner usa un proceso en tres fases:
+```text
+_Briner Quarantine\AAAA-MM
+```
 
-1. **Reglas locales (sin internet):** extensión del archivo (`.pdf`, `.exe`, `.jpg`...) y palabras clave en el nombre (`cv`, `factura`, `modulo`...). Rápido e instantáneo.
-2. **IA por lote (Gemini):** para los archivos que las reglas no pueden clasificar con certeza, Briner envía un grupo de hasta 50 archivos en una sola llamada a la API y recibe las categorías para todos. Si ya clasificó un archivo con el mismo patrón antes, usa la caché (sin llamar a la API de nuevo).
-3. **Fallback individual:** si el lote falla, intenta clasificar cada archivo ambiguo por separado.
+Si algo termina en cuarentena por error, puedes moverlo manualmente de vuelta.
 
-Si no hay API key o la IA falla, los archivos ambiguos van a `7. Varios`.
+## Icono de Bandeja
 
----
-
-## Ícono de la bandeja del sistema
-
-Al arrancar, Briner muestra un círculo de color en la bandeja del sistema (esquina inferior derecha, junto a WiFi y volumen). Si no lo ves, haz clic en la flecha `∧` para ver los íconos ocultos.
-
-| Color | Significado |
+| Color | Estado |
 |---|---|
 | Verde | Corriendo normalmente |
-| Azul | Procesando archivos activamente |
-| Rojo | Error activo (ver menú para detalles) |
+| Azul | Procesando |
+| Rojo | Error activo |
 
-### Menú del ícono (clic derecho)
+Menu de clic derecho:
 
-- **Estado y contadores** — archivos pendientes, procesados totales, errores, hora del último ciclo.
-- **Últimas 5 acciones** — feed en vivo de los archivos más recientes (`[>]` movido, `[!]` error, `[*]` procesando, `[-]` ignorado).
-- **Abrir monitor en tiempo real** — abre la ventana BrinerMonitor con el historial completo.
-- **Ver logs** — abre el archivo de log en el explorador.
-- **Abrir carpeta monitoreada** — abre la carpeta en el explorador.
-- **Forzar escaneo ahora** — lanza un ciclo inmediato sin esperar la hora.
-- **Cambiar API key...** — abre un cuadro de diálogo para pegar una nueva API key de Gemini. Briner la guarda y la aplica sin necesidad de reiniciar.
-- **Detener Briner** — apaga el servicio (no vuelve a arrancar hasta el próximo inicio de Windows o si lo lanzas manualmente).
+- Abrir monitor en tiempo real.
+- Ver logs.
+- Abrir carpeta monitoreada.
+- Abrir documentos por revisar.
+- Forzar escaneo ahora.
+- Cambiar carpeta.
+- Pausar/Reanudar.
+- Deshacer ultimo movimiento.
+- Cambiar API key.
+- Detener Briner.
 
----
+## Briner Monitor
 
-## Ventana BrinerMonitor
+Briner Monitor permite manejar la app sin comandos:
 
-La ventana de monitoreo muestra en tiempo real la actividad de Briner. Puedes abrirla desde el acceso directo "Briner Monitor" en el Escritorio o desde el menú de la bandeja.
+- Ver pendientes, procesados y errores.
+- Revisar los ultimos eventos.
+- Forzar escaneo.
+- Cambiar carpeta monitoreada.
+- Pausar o reanudar.
+- Deshacer ultimo movimiento.
+- Abrir `Documentos por Revisar`.
+- Abrir logs.
+- Cambiar API key.
 
-- **Indicador verde/gris/rojo** — estado actual del servicio.
-- **Pendientes / Procesados / Errores** — contadores del total acumulado en la base de datos.
-- **Tabla de eventos** — los últimos 100 movimientos con hora, nombre de archivo, categoría, fuente de decisión, acción y modo (dry-run o real).
-- **⚡ Forzar escaneo** — señaliza a BrinerBackground para que procese de inmediato.
-- **↺ Actualizar ahora** — refresca la tabla al instante (se refresca automáticamente cada 3 segundos).
-- **Abrir logs** — abre la carpeta de logs.
+Cuando cambias la API key desde Monitor, BrinerBackground la recarga automaticamente mediante IPC. No hace falta reiniciar.
 
-Minimizar la ventana la oculta a la bandeja del sistema (no a la barra de tareas). Para cerrarla completamente usa el menú de la bandeja → Cerrar.
+## Cambiar Carpeta Monitoreada
 
----
+Opcion recomendada:
 
-## Cambiar la API key
+1. Abre Briner Monitor.
+2. Pulsa `Cambiar carpeta`.
+3. Selecciona la nueva carpeta.
+4. Briner aplica el cambio en el siguiente ciclo inmediato.
 
-### Desde la bandeja (más fácil)
-Clic derecho en el ícono de Briner → **Cambiar API key...** → pega la nueva clave → Aceptar.
-Briner la guarda y recarga el modelo sin reiniciar.
+Tambien puedes hacerlo desde el icono de bandeja con `Cambiar carpeta...`.
 
-### Manualmente
-Edita el archivo `%APPDATA%\Briner\.env`:
+Si la carpeta anterior deja de existir, Briner se pausa y espera a que configures una carpeta valida.
+
+## Cambiar API Key
+
+Opcion recomendada:
+
+1. Abre Briner Monitor o el menu de bandeja.
+2. Pulsa `Cambiar API key`.
+3. Pega la nueva clave.
+4. Briner guarda `.env`, reinicia el cliente Gemini y limpia el circuit breaker.
+
+## Pausar, Reanudar y Forzar Escaneo
+
+- `Pausar`: detiene temporalmente la organizacion.
+- `Reanudar`: vuelve a procesar.
+- `Forzar escaneo`: revisa la carpeta sin esperar el intervalo de una hora.
+
+## Deshacer Ultimo Movimiento
+
+Desde Monitor o bandeja usa `Deshacer`. Briner mueve de vuelta el ultimo archivo movido y registra el evento en el historial.
+
+## Donde Guarda Datos
+
+En modo instalado, todo vive en:
+
+```text
+%APPDATA%\Briner
 ```
-GOOGLE_API_KEY=tu_nueva_api_key
-```
-Luego reinicia BrinerBackground (o usa "Detener Briner" y vuelve a lanzarlo).
 
----
-
-## Cambiar la carpeta monitoreada
-
-La forma más sencilla es volver a ejecutar `Install.bat` — pedirá la nueva carpeta y confirmará la API key.
-
-También puedes editar `%APPDATA%\Briner\user_settings.json`:
-```json
-{
-  "monitoring": {
-    "workspace_dir": "D:\\MiCarpeta",
-    "mode": "interval",
-    "poll_interval": 3600,
-    "dry_run": false
-  }
-}
-```
-Después reinicia BrinerBackground.
-
----
-
-## Archivos de configuración
-
-Todos los datos de Briner se guardan en `%APPDATA%\Briner\`:
-
-| Archivo | Descripción |
+| Archivo/carpeta | Descripcion |
 |---|---|
-| `.env` | API key de Gemini (`GOOGLE_API_KEY=...`) |
-| `user_settings.json` | Carpeta monitoreada, intervalo, modo |
-| `briner.db` | Base de datos SQLite con historial de archivos |
-| `logs\briner.log` | Registro de actividad detallado |
+| `.env` | API key de Gemini |
+| `user_settings.json` | Carpeta monitoreada y opciones basicas |
+| `briner.db` | Historial SQLite |
+| `logs\briner.log` | Logs tecnicos |
+| `commands\*.json` | Comandos pendientes entre Monitor/Tray y Background |
+| `.force_scan` | Senal simple de escaneo inmediato |
 
----
+## Solucion de Problemas
 
-## Logs
+### No veo el icono
+
+Haz clic en la flecha de iconos ocultos junto al reloj de Windows. Si no aparece, abre Briner Monitor desde el escritorio.
+
+### Hay muchos pendientes
+
+Es normal en el primer arranque. Briner procesa por lotes hasta ponerse al dia.
+
+### Gemini dice cuota excedida
+
+Briner abre circuit breaker y reintenta automaticamente. Puedes esperar o cambiar API key.
+
+### API key invalida
+
+Usa `Cambiar API key` desde Monitor o bandeja. No reinicies manualmente.
+
+### Quiero revisar decisiones dudosas
+
+Abre `Documentos por Revisar` desde Monitor o bandeja. Los documentos ambiguos van ahi en vez de perderse dentro de `Varios`.
+
+### Quiero recuperar algo de cuarentena
+
+Abre la carpeta monitoreada y busca:
+
+```text
+_Briner Quarantine
+```
+
+Mueve el archivo manualmente a donde corresponda.
+
+## Comandos Avanzados
+
+Desde `Briner\Briner.exe`:
 
 ```powershell
-Get-Content "$env:APPDATA\Briner\logs\briner.log" -Tail 50
-```
-
-Mensajes normales al arrancar correctamente:
-```
-Iniciando Briner - Agente Autonomo de Gestion de Archivos
-Modo activo: interval
-Carpeta monitoreada: D:\Descargas
-Intervalo efectivo: 3600 segundo(s)
-LLM: lazy (se inicializara al primer archivo ambiguo)
-```
-
----
-
-## Autoarranque con Windows
-
-El acceso directo de inicio automático se instala durante la primera configuración en:
-```
-%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\Briner.lnk
-```
-
-Para quitar el autoarranque: elimina ese acceso directo.
-
----
-
-## Comandos avanzados (desde consola)
-
-Todos los comandos se ejecutan desde `briner_agent\dist\Briner\`:
-
-```powershell
-# Una sola pasada de clasificación y sale
 .\Briner.exe --once
-
-# Simular sin mover archivos (modo seguro para probar)
 .\Briner.exe --once --dry-run
-
-# Ver métricas de rendimiento (latencia LLM, caché, fases)
 .\Briner.exe --metrics
-
-# Reconfigurar carpeta y API key
-.\Briner.exe --setup --watch-dir "D:\MiCarpeta" --api-key "AIza..."
-
-# Deshacer el último movimiento realizado
 .\Briner.exe --undo-last
+.\Briner.exe --setup --watch-dir "D:\Descargas" --api-key "AIza..."
 ```
 
----
-
-## Solución de problemas
-
-### Briner no mueve archivos
-- Verifica que los archivos estén directamente en la carpeta raíz (no en subcarpetas numeradas).
-- Revisa que `dry_run` sea `false` en `user_settings.json`.
-- Revisa el log: `Get-Content "$env:APPDATA\Briner\logs\briner.log" -Tail 30`.
-
-### El monitor muestra muchos pendientes y no avanza
-Esto es normal en el primer arranque con muchos archivos. Briner procesa en lotes continuos (modo "ponerse al día") sin esperas entre lotes. Para carpetas con decenas de miles de archivos puede tardar varias horas. El ícono de la bandeja debería estar azul mientras trabaja.
-
-### Error de API key / ícono rojo
-Usa el menú → **Cambiar API key...** y pega una clave válida de [aistudio.google.com/apikey](https://aistudio.google.com/apikey). Briner funciona sin API key, pero los archivos ambiguos irán a `7. Varios`.
-
-### Quiero probar sin arriesgar mis archivos
-```powershell
-briner_agent\dist\Briner\Briner.exe --once --dry-run
-```
-No mueve nada — solo muestra qué haría en el log y la consola.
-
-### Reinstalar desde cero
-Vuelve a ejecutar `Install.bat`. El instalador cierra cualquier instancia anterior y comienza limpio.
+Estos comandos son para diagnostico o soporte; el uso normal se hace desde Monitor o bandeja.
