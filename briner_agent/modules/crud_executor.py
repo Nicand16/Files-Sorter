@@ -179,6 +179,74 @@ def build_move_file_tool(
     return move_file
 
 
+def move_folder_secure(
+    source_path: str,
+    destination_folder_name: str,
+    workspace_root: str | Path,
+    dry_run: bool = False,
+    destination_aliases: dict | None = None,
+) -> dict:
+    """Move a directory into a validated parent folder under workspace_root."""
+    try:
+        src = Path(source_path)
+        if not src.exists():
+            return {"ok": False, "message": f"Error: La carpeta {source_path} no existe en el disco."}
+        if not src.is_dir():
+            return {"ok": False, "message": "Error: La ruta origen no es una carpeta."}
+
+        workspace = Path(workspace_root).resolve()
+        src_resolved = src.resolve()
+        if not _resolve_inside_workspace(src, workspace):
+            message = _workspace_mismatch_message(source_path, src_resolved, workspace_root, workspace)
+            logger.error(message)
+            return {"ok": False, "error_code": "workspace_mismatch", "message": message}
+
+        destination_folder_name = normalize_destination(destination_folder_name, destination_aliases)
+        safe_destination = _validate_destination(destination_folder_name)
+        dest_parent = (workspace / safe_destination).resolve()
+        if not _resolve_inside_workspace(dest_parent, workspace):
+            return {
+                "ok": False,
+                "error_code": "destination_outside_workspace",
+                "message": (
+                    f"Error: El destino resuelto sale del workspace. "
+                    f"destino_resuelto='{dest_parent}' | workspace_resuelto='{workspace}'"
+                ),
+            }
+
+        dest_path = dest_parent / src.name
+        if dest_path.exists():
+            counter = 1
+            while dest_path.exists():
+                dest_path = dest_parent / f"{src.name} ({counter})"
+                counter += 1
+
+        if dry_run:
+            return {
+                "ok": True,
+                "dry_run": True,
+                "old_path": str(src_resolved),
+                "new_path": str(dest_path),
+                "message": f"Dry-run: carpeta '{src.name}' se moveria a {dest_path}",
+            }
+
+        dest_parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dest_path))
+        logger.info("Accion (move_folder): %s movida a %s/", src.name, destination_folder_name)
+        return {
+            "ok": True,
+            "dry_run": False,
+            "old_path": str(src_resolved),
+            "new_path": str(dest_path.resolve()),
+            "message": f"Exito: Carpeta reubicada exitosamente a {dest_path}",
+        }
+    except ValueError as e:
+        return {"ok": False, "message": f"Error de validacion al mover carpeta: {str(e)}"}
+    except Exception as e:
+        logger.error("Error en move_folder: %s", e)
+        return {"ok": False, "message": f"Error critico al mover carpeta: {str(e)}"}
+
+
 def quarantine_file_secure(
     file_path: str,
     workspace_root: str | Path,

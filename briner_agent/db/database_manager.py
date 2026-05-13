@@ -51,17 +51,29 @@ class DatabaseManager:
         if "retry_count" not in columns:
             conn.execute("ALTER TABLE files ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
             logger.info("Migracion aplicada: columna files.retry_count agregada.")
+        if "is_directory" not in columns:
+            conn.execute("ALTER TABLE files ADD COLUMN is_directory INTEGER DEFAULT 0")
+            logger.info("Migracion aplicada: columna files.is_directory agregada.")
 
-    def register_file(self, filename: str, filepath: str, extension: str, size_bytes: int, last_modified: float):
-        """Registra un archivo o actualiza su informacion sin revivir errores terminales."""
+    def register_file(
+        self,
+        filename: str,
+        filepath: str,
+        extension: str,
+        size_bytes: int,
+        last_modified: float,
+        is_directory: bool = False,
+    ):
+        """Registra un archivo o carpeta, o actualiza su informacion sin revivir errores terminales."""
         query = """
-        INSERT INTO files (filename, filepath, extension, size_bytes, last_modified)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO files (filename, filepath, extension, size_bytes, last_modified, is_directory)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(filepath) DO UPDATE SET
             filename=excluded.filename,
             extension=excluded.extension,
             size_bytes=excluded.size_bytes,
             last_modified=excluded.last_modified,
+            is_directory=excluded.is_directory,
             status=CASE
                 WHEN files.status = 'error' AND COALESCE(files.retry_count, 0) >= 3 THEN files.status
                 ELSE 'pending'
@@ -80,16 +92,16 @@ class DatabaseManager:
                     and existing["status"] == "error"
                     and int(existing["retry_count"] or 0) >= 3
                 )
-                conn.execute(query, (filename, filepath, extension, size_bytes, last_modified))
+                conn.execute(query, (filename, filepath, extension, size_bytes, last_modified, int(is_directory)))
                 if terminal_error:
                     logger.warning(
-                        "Archivo en error definitivo no se reencola (retry_count=%s): %s",
+                        "Elemento en error definitivo no se reencola (retry_count=%s): %s",
                         existing["retry_count"],
                         filepath,
                     )
                 return not terminal_error
         except sqlite3.Error as e:
-            logger.error("Error al registrar archivo %s: %s", filepath, e)
+            logger.error("Error al registrar elemento %s: %s", filepath, e)
             return False
 
     def remove_file(self, filepath: str):
@@ -248,8 +260,8 @@ class DatabaseManager:
             return False
 
     def get_pending_files(self, limit: int | None = None):
-        """Obtiene la lista de archivos marcados como pending."""
-        query = "SELECT id, filename, filepath, extension FROM files WHERE status = 'pending' ORDER BY id"
+        """Obtiene la lista de archivos y carpetas marcados como pending."""
+        query = "SELECT id, filename, filepath, extension, COALESCE(is_directory, 0) as is_directory FROM files WHERE status = 'pending' ORDER BY id"
         params = ()
         if limit:
             query += " LIMIT ?"
@@ -260,7 +272,7 @@ class DatabaseManager:
                 cursor = conn.execute(query, params)
                 return [dict(row) for row in cursor.fetchall()]
         except sqlite3.Error as e:
-            logger.error("Error al obtener archivos pendientes: %s", e)
+            logger.error("Error al obtener elementos pendientes: %s", e)
             return []
 
     def get_metrics(self):

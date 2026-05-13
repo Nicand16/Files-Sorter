@@ -85,6 +85,15 @@ class BrinerEventHandler(FileSystemEventHandler):
         self._recent_events[resolved] = (now, fingerprint[0], fingerprint[1])
         return True
 
+    def _should_register_dir(self, dirpath: str | Path) -> bool:
+        """Only register direct-child directories of watch_directory that are not category roots."""
+        path = Path(dirpath).resolve()
+        if path.parent != self.watch_directory:
+            return False
+        if self._is_ignored_filename(path):
+            return False
+        return not self._is_inside_category(path)
+
     def register_existing_file(self, filepath: str | Path):
         if not self._should_register(filepath):
             return
@@ -96,8 +105,28 @@ class BrinerEventHandler(FileSystemEventHandler):
                 filename=Path(filepath).name,
             ))
 
+    def register_existing_dir(self, dirpath: str | Path):
+        if not self._should_register_dir(dirpath):
+            return
+        path = Path(dirpath).resolve()
+        try:
+            stat = path.stat()
+            if self.db.register_file(path.name, str(path), "", 0, stat.st_mtime, is_directory=True):
+                bus.publish(FileEvent(
+                    state=FileState.DETECTED,
+                    filepath=str(path),
+                    filename=path.name,
+                ))
+        except OSError:
+            pass
+
     def on_created(self, event):
-        if event.is_directory or not self._should_register(event.src_path):
+        if event.is_directory:
+            if self._should_register_dir(event.src_path):
+                logger.info("[CREADA] Carpeta detectada: %s", event.src_path)
+                self.register_existing_dir(event.src_path)
+            return
+        if not self._should_register(event.src_path):
             return
         logger.info("[CREADO] Archivo detectado: %s", event.src_path)
         if self.db.register_file(*self._get_file_info(event.src_path)):
@@ -120,12 +149,18 @@ class BrinerEventHandler(FileSystemEventHandler):
 
     def on_deleted(self, event):
         if event.is_directory:
+            logger.info("[ELIMINADA] Carpeta borrada: %s", event.src_path)
+            self.db.remove_file(str(Path(event.src_path).resolve()))
             return
         logger.info("[ELIMINADO] Archivo borrado: %s", event.src_path)
         self.db.remove_file(str(Path(event.src_path).resolve()))
 
     def on_moved(self, event):
         if event.is_directory:
+            logger.info("[MOVIDA] Carpeta movida de %s a %s", event.src_path, event.dest_path)
+            self.db.remove_file(str(Path(event.src_path).resolve()))
+            if self._should_register_dir(event.dest_path):
+                self.register_existing_dir(event.dest_path)
             return
         logger.info("[MOVIDO] Archivo movido de %s a %s", event.src_path, event.dest_path)
         self.db.remove_file(str(Path(event.src_path).resolve()))
@@ -149,6 +184,10 @@ class DirectoryMonitor:
         for path in files:
             if path.is_file():
                 self.event_handler.register_existing_file(path)
+        # Directories are always scanned at root level only (treated as movable units)
+        for path in self.watch_directory.iterdir():
+            if path.is_dir():
+                self.event_handler.register_existing_dir(path)
 
     def start(self):
         self.watch_directory.mkdir(parents=True, exist_ok=True)

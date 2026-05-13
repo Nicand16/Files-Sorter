@@ -25,14 +25,16 @@ from infra.metrics import (
     M_PHASE3_DURATION,
     metrics,
 )
-from modules.crud_executor import consume_thread_moves, move_file_secure
+from modules.crud_executor import consume_thread_moves, move_file_secure, move_folder_secure
 from modules.rules_engine import (
     build_taxonomy_prompt,
     classify_file,
     classify_file_context,
+    classify_folder,
     is_document_extension,
     normalize_text,
     rank_file_categories,
+    sample_folder_files,
     taxonomy_categories,
 )
 from runtime.event_bus import FileEvent, FileState, bus
@@ -1010,6 +1012,171 @@ REGLAS DE OPERACION:
         return
 
     # ------------------------------------------------------------------ #
+    # Procesamiento de carpetas                                            #
+    # ------------------------------------------------------------------ #
+
+    def _apply_folder_move(
+        self,
+        folderpath: str,
+        foldername: str,
+        category: str,
+        decision_source: str,
+        reason: str,
+        confidence: float | None,
+    ):
+        """Moves a folder to the target category and records the event in DB."""
+        move_result = move_folder_secure(
+            source_path=folderpath,
+            destination_folder_name=category,
+            workspace_root=self.workspace_root,
+            dry_run=self.dry_run,
+            destination_aliases=self.destination_aliases,
+        )
+        if not move_result["ok"]:
+            self._handle_move_failure(folderpath, move_result)
+
+        self.db.log_classification_event(
+            filepath=folderpath,
+            decision_source=decision_source,
+            action="move",
+            old_path=move_result.get("old_path", folderpath),
+            new_path=move_result.get("new_path"),
+            category=category,
+            reason=reason,
+            confidence=confidence,
+            dry_run=move_result.get("dry_run", False),
+        )
+        self.db.log_action(folderpath, f"{decision_source}_move_folder", move_result["message"])
+        if not move_result.get("dry_run"):
+            self.db.update_file_path(folderpath, move_result["new_path"], "processed")
+        logger.info(move_result["message"])
+        self._emit(FileState.MOVED, folderpath, foldername, category=category, decision_source=decision_source)
+
+    def _classify_folder_with_llm(
+        self, folder_name: str, sample_names: list[str]
+    ) -> tuple[str, str, float | None] | None:
+        """Classify a folder via LLM using its name and sampled file names."""
+        taxonomy = build_taxonomy_prompt(self.config)
+        folder_info = {"folder_name": folder_name, "sample_files": sample_names}
+        folder_json = json.dumps(folder_info, ensure_ascii=False, indent=2)
+        prompt = (
+            "Clasifica esta carpeta en una de las categorias de la taxonomia.\n"
+            "Usa el nombre de la carpeta y los archivos de muestra como contexto.\n"
+            "Responde EXCLUSIVAMENTE con un objeto JSON valido, sin texto adicional ni markdown.\n\n"
+            f"Taxonomia:\n{taxonomy}\n\n"
+            "Reglas:\n"
+            "- Elige la categoria (puede ser top-level o subcategoria) que mejor describa la carpeta.\n"
+            "- Si hay mezcla de contenidos, elige la categoria predominante.\n"
+            "- Usa Varios solo si no hay evidencia razonable en nombre ni archivos de muestra.\n\n"
+            'Formato: {"category": "<categoria exacta o Varios>", "confidence": 0.0, "reason": "<evidencia breve>"}\n\n'
+            f"Carpeta:\n{folder_json}"
+        )
+        try:
+            response = self._invoke_llm_with_timeout(prompt, timeout_seconds=self.llm_timeout_seconds)
+            results = self._parse_llm_decisions(response)
+            if not results:
+                logger.warning("LLM no retorno JSON valido para carpeta '%s'.", folder_name)
+                return None
+            self._record_api_success()
+            raw = results[0]
+            category = self._normalize_category(raw.get("category"))
+            if not category:
+                return None
+            confidence = self._coerce_confidence(raw.get("confidence"))
+            reason = str(raw.get("reason") or "Clasificacion de carpeta por LLM.").strip()
+            return category, reason, confidence
+        except Exception as e:
+            from runtime.circuit_breaker import CircuitOpenError
+            if not isinstance(e, CircuitOpenError):
+                self._record_api_failure(str(e))
+            logger.error("Error en clasificacion LLM de carpeta '%s': %s", folder_name, e)
+            return None
+
+    def _process_folders(
+        self,
+        folder_records: list[dict],
+        result: dict,
+        tray=None,
+        base_processed_total: int = 0,
+        base_errors_total: int = 0,
+    ):
+        """Process pending folders: local rules + sampling → LLM → Varios fallback."""
+        logger.info("Procesando %d carpeta(s) pendiente(s)...", len(folder_records))
+        for folder_record in folder_records:
+            folderpath = folder_record["filepath"]
+            foldername = folder_record["filename"]
+
+            if not self._claim_path(folderpath):
+                result["skipped"] += 1
+                continue
+
+            try:
+                self._emit(FileState.PROCESSING, folderpath, foldername)
+
+                # Phase 1+2+3: local rules + name + sampling
+                path = Path(folderpath)
+                if not path.is_dir():
+                    # Folder was moved or deleted externally; clean up
+                    self.db.update_file_status(folderpath, "processed")
+                    result["processed"] += 1
+                    continue
+
+                decision = classify_folder(foldername, folderpath, self.config)
+                if decision:
+                    logger.info(
+                        "Regla para carpeta '%s': categoria=%s confidence=%.2f",
+                        foldername, decision.category, decision.confidence,
+                    )
+                    self._apply_folder_move(
+                        folderpath, foldername, decision.category, "rule",
+                        decision.reason, decision.confidence,
+                    )
+                    result["processed"] += 1
+                    metrics.inc(M_FILES_PROCESSED)
+                    continue
+
+                # Phase 4: LLM
+                if self.llm:
+                    self._update_tray_progress(
+                        tray, f"LLM: clasificando carpeta '{foldername}'",
+                        result, base_processed_total, base_errors_total, pending=1,
+                    )
+                    sample_names = sample_folder_files(path)
+                    llm_result = self._classify_folder_with_llm(foldername, sample_names)
+                    if llm_result:
+                        category, reason, confidence = llm_result
+                        self._apply_folder_move(
+                            folderpath, foldername, category, "llm_individual", reason, confidence,
+                        )
+                        result["processed"] += 1
+                        metrics.inc(M_FILES_PROCESSED)
+                        continue
+
+                # Fallback: Varios/Documentos por Revisar
+                fallback_category = "Varios/Documentos por Revisar"
+                self._apply_folder_move(
+                    folderpath, foldername, fallback_category, "system",
+                    "Sin clasificacion clara para la carpeta; enviada a revision.", None,
+                )
+                result["processed"] += 1
+                metrics.inc(M_FILES_PROCESSED)
+
+            except MoveFailureError as e:
+                logger.error("Error al mover carpeta '%s': %s", foldername, e)
+                self.db.update_file_status(folderpath, "error")
+                result["errors"] += 1
+                metrics.inc(M_FILES_ERRORS)
+                self._emit(FileState.ERROR, folderpath, foldername, reason=str(e))
+            except Exception as e:
+                logger.error("Error procesando carpeta '%s': %s", foldername, e)
+                self.db.update_file_status(folderpath, "error")
+                result["errors"] += 1
+                metrics.inc(M_FILES_ERRORS)
+                self._emit(FileState.ERROR, folderpath, foldername, reason=str(e))
+            finally:
+                self._release_path(folderpath)
+
+    # ------------------------------------------------------------------ #
     # Control de concurrencia                                              #
     # ------------------------------------------------------------------ #
 
@@ -1034,15 +1201,29 @@ REGLAS DE OPERACION:
             return self._process_pending_files_inner(tray, base_processed_total, base_errors_total)
 
     def _process_pending_files_inner(self, tray=None, base_processed_total: int = 0, base_errors_total: int = 0):
-        pending_files = self.db.get_pending_files(limit=self.max_files_per_cycle)
-        result = {"pending": len(pending_files), "processed": 0, "errors": 0, "skipped": 0}
+        pending_items = self.db.get_pending_files(limit=self.max_files_per_cycle)
+        result = {“pending”: len(pending_items), “processed”: 0, “errors”: 0, “skipped”: 0}
 
-        logger.info("Pendientes en BD: %s (limite ciclo: %s)", len(pending_files), self.max_files_per_cycle)
-        if not pending_files:
-            logger.info("Sin archivos pendientes. Esperando proximo ciclo.")
+        logger.info(“Pendientes en BD: %s (limite ciclo: %s)”, len(pending_items), self.max_files_per_cycle)
+        if not pending_items:
+            logger.info(“Sin archivos pendientes. Esperando proximo ciclo.”)
             return result
 
-        logger.info("Orquestador detecto %s archivo(s) pendiente(s). Procesando...", len(pending_files))
+        # Separate folders from files
+        folder_records = [item for item in pending_items if item.get(“is_directory”)]
+        pending_files = [item for item in pending_items if not item.get(“is_directory”)]
+
+        logger.info(
+            “Orquestador detecto %s elemento(s): %s archivo(s), %s carpeta(s).”,
+            len(pending_items), len(pending_files), len(folder_records),
+        )
+
+        # Process folders first (before file pipeline)
+        if folder_records:
+            self._process_folders(folder_records, result, tray, base_processed_total, base_errors_total)
+
+        if not pending_files:
+            return result
 
         # Fase 1: reglas deterministicas â€” sin API, rapido
         ambiguous = []

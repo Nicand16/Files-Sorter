@@ -80,8 +80,31 @@ def scan_directory_once(watch_directory: str | Path, db_manager, config: dict | 
         except OSError as exc:
             logger.warning("No se pudo registrar %s: %s", path, exc)
 
+    # Scan directories at root level (always non-recursive: a folder is treated as a unit)
+    detected_dirs = 0
+    for path in watch_path.iterdir():
+        try:
+            if not path.is_dir():
+                continue
+            if _is_ignored(path, ignored_filenames, ignored_patterns):
+                skipped_ignored += 1
+                continue
+            if _is_inside_any(path, category_roots):
+                skipped_category += 1
+                continue
+            stat = path.stat()
+            if db_manager.register_file(path.name, str(path.resolve()), "", 0, stat.st_mtime, is_directory=True):
+                detected_dirs += 1
+                bus.publish(FileEvent(
+                    state=FileState.DETECTED,
+                    filepath=str(path.resolve()),
+                    filename=path.name,
+                ))
+        except OSError as exc:
+            logger.warning("No se pudo registrar carpeta %s: %s", path, exc)
+
     logger.info(
-        "Escaneo en %s: %s registrados | %s en categorias existentes | %s ignorados",
-        watch_path, detected, skipped_category, skipped_ignored,
+        "Escaneo en %s: %s archivos + %s carpetas registrados | %s en categorias existentes | %s ignorados",
+        watch_path, detected, detected_dirs, skipped_category, skipped_ignored,
     )
-    return detected
+    return detected + detected_dirs

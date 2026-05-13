@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS files (
     filepath TEXT NOT NULL UNIQUE,
     extension TEXT,
     size_bytes INTEGER,
+    is_directory INTEGER DEFAULT 0,
     status TEXT DEFAULT 'pending', -- Estados: pending, processed, error
     retry_count INTEGER NOT NULL DEFAULT 0,
     last_modified TIMESTAMP,
