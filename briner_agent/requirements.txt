@@ -3,6 +3,7 @@ watchdog
 langchain-core
 langgraph
 langchain-google-genai
+langchain-groq
 pypdf
 python-docx
 pytest

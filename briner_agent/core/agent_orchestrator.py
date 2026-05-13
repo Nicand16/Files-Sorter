@@ -1289,7 +1289,7 @@ REGLAS DE OPERACION:
             )
             metrics.inc(M_FILES_PROCESSED, result["processed"] - _chunk_processed_before)
             metrics.inc(M_FILES_ERRORS, result["errors"] - _chunk_errors_before)
-            # Pace API calls to stay within Gemini free-tier rate limits (15 req/min)
+            # Pace API calls — Groq free tier: 30 req/min; Gemini free tier: 15 req/min
             if i + self.llm_batch_size < len(ambiguous):
                 _time.sleep(2)
         metrics.record(M_PHASE2_DURATION, __import__("time").perf_counter() - _phase23_start)
