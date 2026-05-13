@@ -18,6 +18,7 @@ a = Analysis(
         'PIL.ImageDraw',
         'runtime',
         'runtime.commands',
+        'runtime.event_bus',
     ],
     hookspath=[],
     hooksconfig={},
