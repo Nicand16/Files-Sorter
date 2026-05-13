@@ -1,5 +1,10 @@
-﻿import logging
+import logging
 import os
+
+try:
+    from langchain_groq import ChatGroq
+except ImportError:
+    ChatGroq = None
 
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -10,33 +15,38 @@ logger = logging.getLogger(__name__)
 
 
 def get_llm(config: dict):
-    """Inicializa y retorna el modelo LLM si sus dependencias y credenciales existen."""
+    """Inicializa el LLM: Groq (primario) → Gemini (fallback) → None."""
     llm_config = config.get("llm", {})
-    model_name = llm_config.get("model", "gemini-1.5-pro")
     temperature = llm_config.get("temperature", 0.2)
 
-    if not ChatGoogleGenerativeAI:
-        logger.warning("langchain_google_genai no esta instalado. Motor LLM deshabilitado.")
-        return None
+    # Prioridad 1: Groq (30 req/min, 14.400 req/dia gratis)
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key and ChatGroq:
+        groq_model = llm_config.get("groq_model", "llama-3.3-70b-versatile")
+        try:
+            llm = ChatGroq(model=groq_model, temperature=temperature, api_key=groq_key)
+            logger.info("Motor LLM inicializado: Groq (%s)", groq_model)
+            return llm
+        except Exception as e:
+            logger.warning("Error al inicializar Groq, intentando Gemini: %s", e)
 
-    google_key = os.environ.get("GOOGLE_API_KEY")
-    gemini_key = os.environ.get("GEMINI_API_KEY")
-    if not google_key and gemini_key:
-        os.environ["GOOGLE_API_KEY"] = gemini_key
-        google_key = gemini_key
+    # Prioridad 2: Gemini (fallback opcional — si la key esta configurada)
+    google_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")
+    if google_key and ChatGoogleGenerativeAI:
+        if not os.environ.get("GOOGLE_API_KEY"):
+            os.environ["GOOGLE_API_KEY"] = google_key
+        gemini_model = llm_config.get("gemini_model", "gemini-2.5-flash")
+        try:
+            llm = ChatGoogleGenerativeAI(
+                model=gemini_model,
+                temperature=temperature,
+                max_output_tokens=8192,
+            )
+            logger.info("Motor LLM inicializado: Gemini (%s)", gemini_model)
+            return llm
+        except Exception as e:
+            logger.error("Error al inicializar Gemini: %s", e)
+            return None
 
-    if not google_key:
-        logger.warning("Falta GOOGLE_API_KEY/GEMINI_API_KEY. Motor LLM deshabilitado.")
-        return None
-
-    try:
-        llm = ChatGoogleGenerativeAI(
-            model=model_name,
-            temperature=temperature,
-            max_output_tokens=8192,
-        )
-        logger.info("Motor LLM inicializado exitosamente (Modelo: %s)", model_name)
-        return llm
-    except Exception as e:
-        logger.error("Error al inicializar el motor LLM: %s", e)
-        return None
+    logger.warning("Falta GROQ_API_KEY y GOOGLE_API_KEY/GEMINI_API_KEY. Motor LLM deshabilitado.")
+    return None
