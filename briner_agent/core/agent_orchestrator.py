@@ -1,4 +1,4 @@
-﻿import json
+import json
 import logging
 import re
 import threading
@@ -78,9 +78,9 @@ class BrinerOrchestrator:
     Orquestador principal del agente Briner.
 
     Flujo de procesamiento en 3 fases:
-      1. Reglas deterministicas (sin API) â€” extension/keyword â†’ movimiento directo.
+      1. Reglas deterministicas (sin API) -- extension/keyword -> movimiento directo.
       2. Clasificacion por lote (1 API call para todos los archivos ambiguos del ciclo).
-      3. Fallback ReAct por archivo â€” solo si el lote falla.
+      3. Fallback ReAct por archivo -- solo si el lote falla.
     """
 
     def __init__(self, config: dict, db_manager, workspace_dir=None):
@@ -217,7 +217,7 @@ class BrinerOrchestrator:
                 )
             else:
                 self._notify_error(
-                    "API key de Gemini invalida o expirada. Ve a Bandeja â†’ Cambiar API key.",
+                    "API key de Gemini invalida o expirada. Ve a Bandeja -> Cambiar API key.",
                     notify=True,
                 )
 
@@ -717,10 +717,10 @@ REGLAS DE OPERACION:
             from runtime.circuit_breaker import CircuitOpenError
             if isinstance(e, CircuitOpenError):
                 if self._circuit_error_type == "rate_limit":
-                    logger.info("ReAct saltado (rate limit): %s â€” se reintentara automaticamente.", e)
+                    logger.info("ReAct saltado (rate limit): %s -- se reintentara automaticamente.", e)
                     return "skipped"  # archivo queda pending, catch-up lo reintenta
                 else:
-                    logger.warning("ReAct saltado (circuit ABIERTO auth): %s â€” usando fallback controlado.", e)
+                    logger.warning("ReAct saltado (circuit ABIERTO auth): %s -- usando fallback controlado.", e)
                     try:
                         self._apply_move(
                             filepath,
@@ -1100,7 +1100,7 @@ REGLAS DE OPERACION:
         base_processed_total: int = 0,
         base_errors_total: int = 0,
     ):
-        """Process pending folders: local rules + sampling → LLM → Varios fallback."""
+        """Process pending folders: local rules + sampling -> LLM -> Varios fallback."""
         logger.info("Procesando %d carpeta(s) pendiente(s)...", len(folder_records))
         for folder_record in folder_records:
             folderpath = folder_record["filepath"]
@@ -1202,19 +1202,19 @@ REGLAS DE OPERACION:
 
     def _process_pending_files_inner(self, tray=None, base_processed_total: int = 0, base_errors_total: int = 0):
         pending_items = self.db.get_pending_files(limit=self.max_files_per_cycle)
-        result = {“pending”: len(pending_items), “processed”: 0, “errors”: 0, “skipped”: 0}
+        result = {"pending": len(pending_items), "processed": 0, "errors": 0, "skipped": 0}
 
-        logger.info(“Pendientes en BD: %s (limite ciclo: %s)”, len(pending_items), self.max_files_per_cycle)
+        logger.info("Pendientes en BD: %s (limite ciclo: %s)", len(pending_items), self.max_files_per_cycle)
         if not pending_items:
-            logger.info(“Sin archivos pendientes. Esperando proximo ciclo.”)
+            logger.info("Sin archivos pendientes. Esperando proximo ciclo.")
             return result
 
         # Separate folders from files
-        folder_records = [item for item in pending_items if item.get(“is_directory”)]
-        pending_files = [item for item in pending_items if not item.get(“is_directory”)]
+        folder_records = [item for item in pending_items if item.get("is_directory")]
+        pending_files = [item for item in pending_items if not item.get("is_directory")]
 
         logger.info(
-            “Orquestador detecto %s elemento(s): %s archivo(s), %s carpeta(s).”,
+            "Orquestador detecto %s elemento(s): %s archivo(s), %s carpeta(s).",
             len(pending_items), len(pending_files), len(folder_records),
         )
 
@@ -1225,7 +1225,7 @@ REGLAS DE OPERACION:
         if not pending_files:
             return result
 
-        # Fase 1: reglas deterministicas â€” sin API, rapido
+        # Fase 1: reglas deterministicas -- sin API, rapido
         ambiguous = []
         with metrics.span(M_PHASE1_DURATION):
             for file_record in pending_files:
@@ -1266,7 +1266,7 @@ REGLAS DE OPERACION:
             return result
 
         logger.info(
-            "%d archivo(s) ambiguo(s) â†’ clasificacion por lote (chunks de %d).",
+            "%d archivo(s) ambiguo(s) -> clasificacion por lote (chunks de %d).",
             len(ambiguous),
             self.llm_batch_size,
         )
