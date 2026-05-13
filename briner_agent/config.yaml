@@ -26,7 +26,8 @@ database:
   sqlite_path: "./db/briner.db"
 
 llm:
-  model: "gemini-2.5-flash"
+  groq_model: "llama-3.3-70b-versatile"
+  gemini_model: "gemini-2.5-flash"
   temperature: 0.2
 
 rules:
