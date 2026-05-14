@@ -92,14 +92,14 @@ echo.
 echo  Carpeta seleccionada: !WATCH_DIR!
 echo.
 
-:: --- API key de Gemini ---
-echo  Necesitas una API key de Google Gemini ^(gratuita^).
-echo  Obtenla en: https://aistudio.google.com/apikey
+:: --- API key de Groq ---
+echo  Necesitas una API key de Groq ^(gratuita — 14.400 solicitudes al dia^).
+echo  Obtenla en: https://console.groq.com
 echo.
-set /p "GEMINI_KEY=  Pega tu API key aqui: "
-set "GEMINI_KEY=!GEMINI_KEY: =!"
+set /p "GROQ_KEY=  Pega tu API key aqui: "
+set "GROQ_KEY=!GROQ_KEY: =!"
 
-if "!GEMINI_KEY!"=="" (
+if "!GROQ_KEY!"=="" (
     echo.
     echo  No se ingreso ninguna API key. Instalacion cancelada.
     echo.
@@ -110,7 +110,7 @@ echo.
 
 :: --- Guardar API key en APPDATA\Briner\.env ---
 if not exist "%APPDATA%\Briner" mkdir "%APPDATA%\Briner"
-echo GOOGLE_API_KEY=!GEMINI_KEY!> "%APPDATA%\Briner\.env"
+echo GROQ_API_KEY=!GROQ_KEY!> "%APPDATA%\Briner\.env"
 
 :: --- Configurar Briner ---
 echo  Configurando Briner...

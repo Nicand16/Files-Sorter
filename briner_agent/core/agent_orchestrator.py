@@ -10,7 +10,7 @@ try:
 except ImportError:
     create_react_agent = None
 
-from core.llm_engine import get_llm
+from core.llm_engine import get_llm, get_llm_providers
 from infra.metrics import (
     M_CACHE_HITS,
     M_CACHE_MISSES,
@@ -60,6 +60,11 @@ def _is_rate_limit_error(exc_or_msg) -> bool:
         "quota", "rate limit", "resource_exhausted",
         "too many requests", "429", "ratequotaexceeded",
     ))
+
+
+def _is_daily_limit_error(exc_or_msg) -> bool:
+    msg = str(exc_or_msg).lower()
+    return any(kw in msg for kw in ("per day", "rpd", "daily", "requests per day"))
 
 
 class MoveFailureError(RuntimeError):
@@ -133,15 +138,21 @@ class BrinerOrchestrator:
         self._consecutive_api_failures = 0
         # Lazy LLM init: do NOT call get_llm() at construction time
         self._llm_obj = None
+        self._groq_llm = None
+        self._gemini_llm = None
         self._llm_initialized = False
         self._llm_init_lock = threading.Lock()
         self._llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="BrinerLLMInvoke")
         self.agent = None  # set lazily when LLM first initializes
-        # Circuit breaker replaces the bare consecutive-failures counter
+        # Dual circuit breakers — one per provider
         from runtime.circuit_breaker import CircuitBreaker
-        cb_threshold = int(config.get("processing", {}).get("circuit_breaker_threshold", 3))
-        cb_recovery = float(config.get("processing", {}).get("circuit_breaker_recovery_seconds", 60.0))
-        self._circuit = CircuitBreaker("gemini", cb_threshold, cb_recovery)
+        proc = config.get("processing", {})
+        cb_threshold = int(proc.get("circuit_breaker_threshold", 3))
+        self._groq_circuit = CircuitBreaker("groq", cb_threshold, float(proc.get("groq_circuit_recovery_seconds", 65.0)))
+        self._gemini_circuit = CircuitBreaker("gemini", cb_threshold, float(proc.get("gemini_circuit_recovery_seconds", 65.0)))
+        self._groq_daily_recovery = float(proc.get("groq_daily_circuit_recovery_seconds", 3600.0))
+        self._gemini_daily_recovery = float(proc.get("gemini_daily_circuit_recovery_seconds", 3600.0))
+        self._circuit = self._groq_circuit  # backward compat alias
         self._circuit_error_type: str | None = None  # "rate_limit" | "auth_error" | None
         # Decision cache: avoids redundant LLM calls for files with same extension+stem pattern
         from classifiers.decision_cache import DecisionCache
@@ -168,20 +179,26 @@ class BrinerOrchestrator:
         if loaded:
             logger.info("Decision cache precargado desde SQLite: %s decision(es).", loaded)
 
+    def _init_llm_providers(self):
+        """Inicializa ambos providers. Debe llamarse con _llm_init_lock adquirido."""
+        providers = get_llm_providers(self.config)
+        self._groq_llm = providers["groq"]
+        self._gemini_llm = providers["gemini"]
+        self._llm_obj = self._groq_llm or self._gemini_llm
+        self._llm_initialized = True
+        if self._llm_obj:
+            self.agent = self._initialize_agent()
+        else:
+            self.agent = None
+            logger.warning("Sin LLM disponible (faltan API keys).")
+
     @property
     def llm(self):
         if self._llm_initialized:
             return self._llm_obj
         with self._llm_init_lock:
             if not self._llm_initialized:
-                logger.info("Inicializando LLM (primer uso)...")
-                self._llm_obj = get_llm(self.config)
-                self._llm_initialized = True
-                if self._llm_obj:
-                    logger.info("LLM inicializado correctamente.")
-                    self.agent = self._initialize_agent()
-                else:
-                    logger.warning("LLM no disponible (API key ausente o error de init).")
+                self._init_llm_providers()
         return self._llm_obj
 
     def set_tray(self, tray):
@@ -195,54 +212,106 @@ class BrinerOrchestrator:
         if self._tray and hasattr(self._tray, "set_error"):
             self._tray.set_error(message, notify=notify)
 
-    def _record_api_failure(self, message: str):
+    def _record_api_failure(self, message: str, provider: str = "groq"):
         import json as _json
         metrics.inc(M_LLM_FAILURES_TOTAL)
         self._consecutive_api_failures += 1
+        circuit = self._groq_circuit if provider == "groq" else self._gemini_circuit
+        etype = None
         if _is_rate_limit_error(message):
-            self._circuit_error_type = "rate_limit"
+            etype = "rate_limit"
+            if _is_daily_limit_error(message):
+                circuit.recovery_seconds = self._groq_daily_recovery if provider == "groq" else self._gemini_daily_recovery
         elif _is_api_key_error(message):
-            self._circuit_error_type = "auth_error"
-        self._circuit.record_failure(message)
+            etype = "auth_error"
+        self._circuit_error_type = etype
+        circuit.record_failure(message)
         from runtime.circuit_breaker import CircuitState
-        if self._circuit.state == CircuitState.OPEN:
-            etype = self._circuit_error_type or "unknown"
-            recovery = self._circuit.recovery_seconds
-            payload = _json.dumps({"type": etype, "recovery_seconds": recovery, "msg": message[:300]})
+        if circuit.state == CircuitState.OPEN:
+            recovery = circuit.recovery_seconds
+            payload = _json.dumps({"provider": provider, "type": etype or "unknown", "recovery_seconds": recovery, "msg": message[:300]})
             self.db.log_system_event("circuit_open", payload)
-            if etype == "rate_limit":
-                self._notify_error(
-                    f"Cuota de Gemini excedida. Reintentando automaticamente en ~{int(recovery)}s.",
-                    notify=True,
-                )
+            has_gemini = bool(self._gemini_llm)
+            is_daily = etype == "rate_limit" and _is_daily_limit_error(message)
+            if provider == "groq":
+                if etype == "rate_limit":
+                    if is_daily:
+                        msg = ("Limite diario de Groq alcanzado. Usando Gemini como respaldo." if has_gemini
+                               else "Limite diario de Groq alcanzado. Configura API Gemini desde Monitor, o espera hasta manana.")
+                    else:
+                        msg = ("Cuota por minuto de Groq excedida. Usando Gemini como respaldo." if has_gemini
+                               else f"Cuota de Groq excedida. Configura API Gemini desde Monitor, o espera ~{int(recovery)}s.")
+                else:
+                    msg = "API key de Groq invalida. Ve a Monitor -> API Groq para cambiarla."
             else:
-                self._notify_error(
-                    "API key de Gemini invalida o expirada. Ve a Bandeja -> Cambiar API key.",
-                    notify=True,
-                )
+                if etype == "rate_limit":
+                    msg = f"Cuota de Gemini excedida. Reintentando en ~{int(recovery)}s."
+                else:
+                    msg = "API key de Gemini invalida. Ve a Monitor -> API Gemini para cambiarla."
+            self._notify_error(msg, notify=True)
 
-    def _record_api_success(self):
+    def _record_api_success(self, provider: str = "groq"):
         self._consecutive_api_failures = 0
+        circuit = self._groq_circuit if provider == "groq" else self._gemini_circuit
         prev_type = self._circuit_error_type
-        self._circuit.record_success()
+        circuit.record_success()
         if prev_type is not None:
-            self.db.log_system_event("circuit_recovered", '{"type": "recovered"}')
+            self.db.log_system_event("circuit_recovered", f'{{"provider": "{provider}", "type": "recovered"}}')
             self._circuit_error_type = None
 
     def _invoke_llm_with_timeout(self, prompt, timeout_seconds: int | None = None):
         from runtime.circuit_breaker import CircuitOpenError
-        self._circuit.before_call()  # raises CircuitOpenError if OPEN
+        if not self._llm_initialized:
+            with self._llm_init_lock:
+                if not self._llm_initialized:
+                    self._init_llm_providers()
         timeout = timeout_seconds or self.llm_timeout_seconds
-        metrics.inc(M_LLM_CALLS_TOTAL)
-        future = self._llm_executor.submit(self.llm.invoke, prompt)
-        try:
-            with metrics.span(M_LLM_CALL):
-                return future.result(timeout=timeout)
-        except TimeoutError:
-            future.cancel()
-            message = f"Timeout de LLM despues de {timeout} segundos."
-            self._record_api_failure(message)
-            raise TimeoutError(message)
+        groq_skipped = False
+
+        # Intentar Groq primero
+        if self._groq_llm:
+            try:
+                self._groq_circuit.before_call()
+            except CircuitOpenError:
+                groq_skipped = True
+            else:
+                metrics.inc(M_LLM_CALLS_TOTAL)
+                future = self._llm_executor.submit(self._groq_llm.invoke, prompt)
+                try:
+                    with metrics.span(M_LLM_CALL):
+                        result = future.result(timeout=timeout)
+                    self._record_api_success("groq")
+                    return result
+                except TimeoutError:
+                    future.cancel()
+                    self._record_api_failure(f"Timeout de Groq despues de {timeout}s.", provider="groq")
+                except Exception as exc:
+                    self._record_api_failure(str(exc), provider="groq")
+
+        # Fallback a Gemini
+        if self._gemini_llm:
+            try:
+                self._gemini_circuit.before_call()
+            except CircuitOpenError:
+                pass
+            else:
+                metrics.inc(M_LLM_CALLS_TOTAL)
+                future = self._llm_executor.submit(self._gemini_llm.invoke, prompt)
+                try:
+                    with metrics.span(M_LLM_CALL):
+                        result = future.result(timeout=timeout)
+                    self._record_api_success("gemini")
+                    return result
+                except TimeoutError:
+                    future.cancel()
+                    msg = f"Timeout de Gemini despues de {timeout}s."
+                    self._record_api_failure(msg, provider="gemini")
+                    raise TimeoutError(msg)
+                except Exception as exc:
+                    self._record_api_failure(str(exc), provider="gemini")
+                    raise
+
+        raise CircuitOpenError("Ambos proveedores LLM estan en espera o sin configurar.")
 
     def _handle_move_failure(self, filepath: str, move_result: dict):
         message = move_result.get("message", "Error desconocido al mover archivo.")
@@ -606,7 +675,6 @@ REGLAS DE OPERACION:
             if not isinstance(results, list):
                 logger.warning("Batch LLM no retorno JSON valido. Respuesta: %.200s", self._response_text(response))
                 return None
-            self._record_api_success()
             logger.info("Batch LLM clasifico %d/%d archivos en una sola llamada.", len(results), len(files))
             return results
         except TimeoutError as e:
@@ -618,7 +686,6 @@ REGLAS DE OPERACION:
                 logger.warning("Batch LLM saltado (circuit ABIERTO): %s", e)
             else:
                 logger.error("Error en clasificacion por lote: %s", e)
-                self._record_api_failure(str(e))
             return None
 
     def _classify_single_with_llm(self, file_info: dict) -> dict | None:
@@ -647,7 +714,6 @@ REGLAS DE OPERACION:
             if not results:
                 logger.warning("LLM individual no retorno JSON valido para %s: %.200s", file_info["filename"], self._response_text(response))
                 return None
-            self._record_api_success()
             return results[0]
         except TimeoutError as e:
             logger.error("Timeout en clasificacion individual para %s: %s", file_info["filename"], e)
@@ -658,7 +724,6 @@ REGLAS DE OPERACION:
                 logger.warning("LLM individual saltado (circuit ABIERTO): %s", e)
             else:
                 logger.error("Error en clasificacion individual para %s: %s", file_info["filename"], e)
-                self._record_api_failure(str(e))
             return None
 
     # ------------------------------------------------------------------ #
@@ -1077,7 +1142,6 @@ REGLAS DE OPERACION:
             if not results:
                 logger.warning("LLM no retorno JSON valido para carpeta '%s'.", folder_name)
                 return None
-            self._record_api_success()
             raw = results[0]
             category = self._normalize_category(raw.get("category"))
             if not category:
@@ -1087,9 +1151,10 @@ REGLAS DE OPERACION:
             return category, reason, confidence
         except Exception as e:
             from runtime.circuit_breaker import CircuitOpenError
-            if not isinstance(e, CircuitOpenError):
-                self._record_api_failure(str(e))
-            logger.error("Error en clasificacion LLM de carpeta '%s': %s", folder_name, e)
+            if isinstance(e, CircuitOpenError):
+                logger.warning("LLM de carpeta saltado (circuit ABIERTO): %s", e)
+            else:
+                logger.error("Error en clasificacion LLM de carpeta '%s': %s", folder_name, e)
             return None
 
     def _process_folders(

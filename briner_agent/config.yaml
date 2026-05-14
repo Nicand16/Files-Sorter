@@ -1,6 +1,6 @@
 app:
   name: "Briner"
-  version: "1.4.0"
+  version: "1.5.0"
   description: "AI Autonomous Agent for File Management"
 
 monitoring:
@@ -47,6 +47,10 @@ processing:
   error_retry_seconds: 60
   circuit_breaker_threshold: 3
   circuit_breaker_recovery_seconds: 60
+  groq_circuit_recovery_seconds: 65
+  gemini_circuit_recovery_seconds: 65
+  groq_daily_circuit_recovery_seconds: 3600
+  gemini_daily_circuit_recovery_seconds: 3600
   decision_cache_size: 200
   decision_cache_ttl_seconds: 3600
 
