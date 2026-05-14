@@ -143,7 +143,8 @@ class BrinerMonitorApp:
         tk.Button(btn_frame, text="⚡ Forzar escaneo", command=self._force_scan).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="↺ Actualizar ahora", command=self._refresh).pack(side=tk.LEFT, padx=4)
         tk.Button(btn_frame, text="Abrir logs", command=self._open_logs).pack(side=tk.LEFT, padx=4)
-        tk.Button(btn_frame, text="🔑 Cambiar API key", command=self._change_api_key).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="🔑 API Groq", command=self._change_groq_key).pack(side=tk.LEFT, padx=4)
+        tk.Button(btn_frame, text="🔑 API Gemini", command=self._change_gemini_key).pack(side=tk.LEFT, padx=4)
 
         ttk.Separator(self.root, orient=tk.HORIZONTAL).pack(fill=tk.X)
 
@@ -315,13 +316,25 @@ class BrinerMonitorApp:
         except Exception as exc:
             tkinter.messagebox.showerror("Briner Monitor", f"No se pudo abrir la carpeta de revision:\n{exc}")
 
-    def _change_api_key(self):
+    def _update_env_key(self, env_path: Path, key_name: str, value: str):
+        lines = []
+        updated = False
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+                if line.strip().startswith(key_name + "="):
+                    lines.append(f"{key_name}={value}")
+                    updated = True
+                else:
+                    lines.append(line)
+        if not updated:
+            lines.append(f"{key_name}={value}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _prompt_api_key(self, title: str, prompt: str) -> str:
         import subprocess
         ps_script = (
             "Add-Type -AssemblyName Microsoft.VisualBasic; "
-            "$key = [Microsoft.VisualBasic.Interaction]::InputBox("
-            "'Pega tu nueva API key de Google Gemini:', "
-            "'Briner Monitor - Cambiar API key', ''); "
+            f"$key = [Microsoft.VisualBasic.Interaction]::InputBox('{prompt}', '{title}', ''); "
             "Write-Output $key"
         )
         try:
@@ -329,19 +342,38 @@ class BrinerMonitorApp:
                 ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps_script],
                 capture_output=True, text=True, timeout=60,
             )
-            new_key = result.stdout.strip()
+            return result.stdout.strip()
         except Exception as exc:
             tkinter.messagebox.showerror("Briner Monitor", f"No se pudo mostrar el dialogo:\n{exc}")
-            return
+            return ""
+
+    def _change_groq_key(self):
+        new_key = self._prompt_api_key(
+            "Briner - API key de Groq",
+            "Pega tu API key de Groq (console.groq.com):",
+        )
         if not new_key:
             return
         env_path = _briner_dir / ".env"
         try:
-            env_path.write_text(f"GOOGLE_API_KEY={new_key}\n", encoding="utf-8")
+            self._update_env_key(env_path, "GROQ_API_KEY", new_key)
             enqueue_command(_briner_dir, "reload_api_key")
-            self._status_label.config(
-                text="API key guardada. Briner la recargara automaticamente."
-            )
+            self._status_label.config(text="API key de Groq guardada. Briner la recargara automaticamente.")
+        except Exception as exc:
+            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo guardar la API key:\n{exc}")
+
+    def _change_gemini_key(self):
+        new_key = self._prompt_api_key(
+            "Briner - API key de Gemini (opcional)",
+            "Pega tu API key de Gemini (aistudio.google.com/apikey) — opcional, solo como respaldo de Groq:",
+        )
+        if not new_key:
+            return
+        env_path = _briner_dir / ".env"
+        try:
+            self._update_env_key(env_path, "GOOGLE_API_KEY", new_key)
+            enqueue_command(_briner_dir, "reload_api_key")
+            self._status_label.config(text="API key de Gemini guardada. Se usara como respaldo automatico de Groq.")
         except Exception as exc:
             tkinter.messagebox.showerror("Briner Monitor", f"No se pudo guardar la API key:\n{exc}")
 

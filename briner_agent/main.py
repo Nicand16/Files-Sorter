@@ -83,7 +83,7 @@ def load_environment(force: bool = False):
             load_dotenv(ep, override=force)
         load_dotenv(override=force)
 
-    if not force and (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
+    if not force and (os.environ.get("GROQ_API_KEY") or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY")):
         env_logger.info("Credenciales IA cargadas.")
         return
 
@@ -91,6 +91,7 @@ def load_environment(force: bool = False):
         if not env_path.exists():
             continue
         try:
+            found_any = False
             for line in env_path.read_text(encoding="utf-8-sig").splitlines():
                 value = line.strip()
                 if not value or value.startswith("#"):
@@ -99,15 +100,14 @@ def load_environment(force: bool = False):
                     key, raw_value = value.split("=", 1)
                     key = key.strip()
                     raw_value = raw_value.strip().strip('"').strip("'")
-                    if key in {"GOOGLE_API_KEY", "GEMINI_API_KEY"} and raw_value:
+                    if key in {"GROQ_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"} and raw_value:
                         os.environ[key] = raw_value
                         if key == "GEMINI_API_KEY":
                             os.environ["GOOGLE_API_KEY"] = raw_value
-                        env_logger.info("Credenciales IA cargadas manualmente desde .env en %s.", env_path.parent)
-                        return
+                        found_any = True
                     continue
-                os.environ["GOOGLE_API_KEY"] = value
-                env_logger.info("API key cargada desde .env en formato simple.")
+            if found_any:
+                env_logger.info("Credenciales IA cargadas manualmente desde .env en %s.", env_path.parent)
                 return
         except OSError as exc:
             env_logger.warning("No se pudo leer .env en %s: %s", env_path, exc)
@@ -380,7 +380,7 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
                     processed_total=processed_total,
                     errors_total=errors_total,
                 )
-            # Brief pause so Gemini rate-limit window can partially recover
+            # Brief pause so Groq rate-limit window can partially recover
             _catchup_deadline = time.monotonic() + 3
             _sentinel = APPDATA_DIR / ".force_scan"
             while time.monotonic() < _catchup_deadline:
@@ -521,13 +521,13 @@ def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
     elif not workspace_dir.is_dir():
         errors.append(f"La ruta monitoreada no es una carpeta: {workspace_dir}")
 
-    has_api_key = bool(os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
+    has_api_key = bool(os.environ.get("GROQ_API_KEY") or os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY"))
     if not has_api_key:
         logger.warning(
-            "Falta GOOGLE_API_KEY/GEMINI_API_KEY. LLM se inicializara al primer archivo ambiguo."
+            "Falta GROQ_API_KEY. LLM se inicializara al primer archivo ambiguo."
         )
         if tray and hasattr(tray, "set_error"):
-            tray.set_error("Falta API key de Gemini. Configura GOOGLE_API_KEY en .env", notify=False)
+            tray.set_error("Falta API key de Groq. Configura GROQ_API_KEY desde el Monitor", notify=False)
 
     if errors:
         message = " | ".join(errors)
@@ -650,9 +650,12 @@ def main():
         with orchestrator._llm_init_lock:
             orchestrator._llm_initialized = False
             orchestrator._llm_obj = None
+            orchestrator._groq_llm = None
+            orchestrator._gemini_llm = None
             orchestrator.agent = None
-        orchestrator._circuit.record_success()
-        logger.info("LLM reiniciado tras cambio de API key.")
+        orchestrator._groq_circuit.record_success()
+        orchestrator._gemini_circuit.record_success()
+        logger.info("Ambos providers LLM reiniciados tras cambio de API key.")
 
     command_processor = RuntimeCommandProcessor(
         appdata_dir=APPDATA_DIR,
