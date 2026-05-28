@@ -1,10 +1,10 @@
 """
-briner_agent/monitor.py
+nap_agent/monitor.py
 
-Standalone monitoring window for Briner.
+Standalone monitoring window for NAP Files-Sorter.
 Reads from the shared SQLite database and shows real-time activity.
 Minimizing hides the window to the system tray; force-scan button signals
-BrinerBackground via a sentinel file to run a classification cycle immediately.
+NAPBackground via a sentinel file to run a classification cycle immediately.
 """
 
 import json
@@ -27,20 +27,20 @@ from PIL import Image, ImageDraw
 IS_FROZEN = getattr(sys, "frozen", False)
 if IS_FROZEN:
     _appdata = os.environ.get("APPDATA", "")
-    _briner_dir = (
-        Path(_appdata) / "Briner"
+    _app_dir = (
+        Path(_appdata) / "NAP Files-Sorter"
         if _appdata
-        else Path.home() / "AppData" / "Roaming" / "Briner"
+        else Path.home() / "AppData" / "Roaming" / "NAP Files-Sorter"
     )
 else:
-    # Dev mode: APPDATA_DIR == CODE_DIR == briner_agent/ (mirrors main.py)
-    _briner_dir = Path(__file__).resolve().parent
+    # Dev mode: APPDATA_DIR == CODE_DIR == nap_agent/ (mirrors main.py)
+    _app_dir = Path(__file__).resolve().parent
 
-DB_PATH = _briner_dir / "briner.db" if IS_FROZEN else _briner_dir / "db" / "briner.db"
-SETTINGS_PATH = _briner_dir / "user_settings.json"
-LOGS_DIR = _briner_dir / "logs"
+DB_PATH = _app_dir / "nap.db" if IS_FROZEN else _app_dir / "db" / "nap.db"
+SETTINGS_PATH = _app_dir / "user_settings.json"
+LOGS_DIR = _app_dir / "logs"
 
-_SENTINEL = _briner_dir / ".force_scan"  # inter-process signal file
+_SENTINEL = _app_dir / ".force_scan"  # inter-process signal file
 
 
 def _make_tray_image() -> Image.Image:
@@ -105,11 +105,11 @@ def _fetch_data():
         return None, None, None
 
 
-class BrinerMonitorApp:
+class NAPMonitorApp:
     def __init__(self, root: tk.Tk):
         self.root = root
         workspace = _read_workspace()
-        title = f"Briner Monitor — {workspace}" if workspace else "Briner Monitor"
+        title = f"NAP Monitor — {workspace}" if workspace else "NAP Monitor"
         root.title(title)
         root.minsize(640, 400)
         root.geometry("940x540")
@@ -191,7 +191,7 @@ class BrinerMonitorApp:
         if rows is None:
             self._status_dot.config(fg="gray")
             if not DB_PATH.exists():
-                self._status_label.config(text="Briner no está configurado todavía")
+                self._status_label.config(text="NAP Files-Sorter no está configurado todavía")
             else:
                 self._status_label.config(text="Error leyendo la base de datos")
             self._counters_label.config(text="")
@@ -265,44 +265,44 @@ class BrinerMonitorApp:
 
     def _force_scan(self):
         try:
-            enqueue_command(_briner_dir, "force_scan")
+            enqueue_command(_app_dir, "force_scan")
             _SENTINEL.touch()
-            self._status_label.config(text="Escaneo solicitado — Briner procesará en breve")
+            self._status_label.config(text="Escaneo solicitado — NAP Files-Sorter procesará en breve")
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo solicitar escaneo:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo solicitar escaneo:\n{exc}")
 
     def _change_workspace(self):
-        folder = tkinter.filedialog.askdirectory(title="Selecciona la carpeta que Briner debe organizar")
+        folder = tkinter.filedialog.askdirectory(title="Selecciona la carpeta que NAP Files-Sorter debe organizar")
         if not folder:
             return
         try:
-            enqueue_command(_briner_dir, "change_workspace", {"workspace_dir": folder})
-            self._status_label.config(text="Cambio de carpeta solicitado. Briner lo aplicara en breve.")
+            enqueue_command(_app_dir, "change_workspace", {"workspace_dir": folder})
+            self._status_label.config(text="Cambio de carpeta solicitado. NAP Files-Sorter lo aplicara en breve.")
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo cambiar la carpeta:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo cambiar la carpeta:\n{exc}")
 
     def _toggle_pause(self):
         self._paused = not self._paused
         command = "pause" if self._paused else "resume"
         try:
-            enqueue_command(_briner_dir, command)
+            enqueue_command(_app_dir, command)
             self._pause_button.config(text="Reanudar" if self._paused else "Pausar")
             self._status_label.config(text="Organizacion pausada" if self._paused else "Organizacion reanudada")
         except Exception as exc:
             self._paused = not self._paused
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo enviar el comando:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo enviar el comando:\n{exc}")
 
     def _undo_last(self):
         try:
-            enqueue_command(_briner_dir, "undo_last")
-            self._status_label.config(text="Deshacer solicitado. Briner lo aplicara en breve.")
+            enqueue_command(_app_dir, "undo_last")
+            self._status_label.config(text="Deshacer solicitado. NAP Files-Sorter lo aplicara en breve.")
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo solicitar deshacer:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo solicitar deshacer:\n{exc}")
 
     def _open_review_folder(self):
         workspace = _read_workspace()
         if not workspace:
-            tkinter.messagebox.showinfo("Briner Monitor", "Primero configura una carpeta monitoreada.")
+            tkinter.messagebox.showinfo("NAP Monitor", "Primero configura una carpeta monitoreada.")
             return
         root = Path(workspace)
         candidates = [
@@ -314,7 +314,7 @@ class BrinerMonitorApp:
             target.mkdir(parents=True, exist_ok=True)
             os.startfile(str(target))
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo abrir la carpeta de revision:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo abrir la carpeta de revision:\n{exc}")
 
     def _update_env_key(self, env_path: Path, key_name: str, value: str):
         lines = []
@@ -344,45 +344,45 @@ class BrinerMonitorApp:
             )
             return result.stdout.strip()
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo mostrar el dialogo:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo mostrar el dialogo:\n{exc}")
             return ""
 
     def _change_groq_key(self):
         new_key = self._prompt_api_key(
-            "Briner - API key de Groq",
+            "NAP Files-Sorter - API key de Groq",
             "Pega tu API key de Groq (console.groq.com):",
         )
         if not new_key:
             return
-        env_path = _briner_dir / ".env"
+        env_path = _app_dir / ".env"
         try:
             self._update_env_key(env_path, "GROQ_API_KEY", new_key)
-            enqueue_command(_briner_dir, "reload_api_key")
-            self._status_label.config(text="API key de Groq guardada. Briner la recargara automaticamente.")
+            enqueue_command(_app_dir, "reload_api_key")
+            self._status_label.config(text="API key de Groq guardada. NAP Files-Sorter la recargara automaticamente.")
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo guardar la API key:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo guardar la API key:\n{exc}")
 
     def _change_gemini_key(self):
         new_key = self._prompt_api_key(
-            "Briner - API key de Gemini (opcional)",
+            "NAP Files-Sorter - API key de Gemini (opcional)",
             "Pega tu API key de Gemini (aistudio.google.com/apikey) — opcional, solo como respaldo de Groq:",
         )
         if not new_key:
             return
-        env_path = _briner_dir / ".env"
+        env_path = _app_dir / ".env"
         try:
             self._update_env_key(env_path, "GOOGLE_API_KEY", new_key)
-            enqueue_command(_briner_dir, "reload_api_key")
+            enqueue_command(_app_dir, "reload_api_key")
             self._status_label.config(text="API key de Gemini guardada. Se usara como respaldo automatico de Groq.")
         except Exception as exc:
-            tkinter.messagebox.showerror("Briner Monitor", f"No se pudo guardar la API key:\n{exc}")
+            tkinter.messagebox.showerror("NAP Monitor", f"No se pudo guardar la API key:\n{exc}")
 
     def _open_logs(self):
         if LOGS_DIR.exists():
             os.startfile(str(LOGS_DIR))
         else:
             tkinter.messagebox.showinfo(
-                "Briner Monitor", f"Carpeta de logs no encontrada:\n{LOGS_DIR}"
+                "NAP Monitor", f"Carpeta de logs no encontrada:\n{LOGS_DIR}"
             )
 
     # --- System tray on minimize ---
@@ -395,11 +395,11 @@ class BrinerMonitorApp:
         self.root.withdraw()
         if self._tray is None:
             menu = pystray.Menu(
-                pystray.MenuItem("Mostrar Briner Monitor", self._restore, default=True),
+                pystray.MenuItem("Mostrar NAP Monitor", self._restore, default=True),
                 pystray.Menu.SEPARATOR,
                 pystray.MenuItem("Cerrar", self._on_close),
             )
-            self._tray = pystray.Icon("BrinerMonitor", _make_tray_image(), "Briner Monitor", menu)
+            self._tray = pystray.Icon("NAPMonitor", _make_tray_image(), "NAP Monitor", menu)
             threading.Thread(target=self._tray.run, daemon=True, name="MonitorTray").start()
 
     def _restore(self, icon=None, item=None):
@@ -422,7 +422,7 @@ class BrinerMonitorApp:
 
 def main():
     root = tk.Tk()
-    BrinerMonitorApp(root)
+    NAPMonitorApp(root)
     root.mainloop()
 
 

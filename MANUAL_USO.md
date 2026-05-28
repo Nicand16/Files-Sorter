@@ -1,33 +1,33 @@
-# Briner - Manual de uso
+# NAP Files-Sorter - Manual de uso
 
-Briner organiza automaticamente los archivos de una carpeta elegida por el usuario. La instalacion normal no requiere Python ni comandos: solo extraer el zip, ejecutar `Install.bat`, elegir carpeta y pegar la API key de Gemini.
+NAP Files-Sorter organiza automaticamente los archivos de una carpeta elegida por el usuario. La instalacion normal no requiere Python ni comandos: solo extraer el zip, ejecutar `Install.bat`, elegir carpeta y pegar la API key de Groq.
 
-Version: `1.2.0`.
+Version: `1.7.0`.
 
 ## Instalacion
 
 ### Requisitos
 
 - Windows 10 u 11.
-- API key gratuita de Google Gemini: <https://aistudio.google.com/apikey>.
-- El zip de release completo: `briner_v1.2.0.zip`.
+- API key gratuita de Groq: <https://console.groq.com> (14.400 solicitudes/dia).
+- El zip de release completo: `nap_v1.7.0.zip`.
 
 ### Pasos
 
 1. Extrae el zip completo en una carpeta.
 2. Ejecuta `Install.bat`.
 3. Selecciona la carpeta que quieres organizar, por ejemplo `Downloads`.
-4. Pega tu API key de Gemini.
-5. Briner arranca en segundo plano, crea el acceso directo de inicio con Windows y abre Briner Monitor.
+4. Pega tu API key de Groq.
+5. NAP Files-Sorter arranca en segundo plano, crea el acceso directo de inicio con Windows y abre NAP Monitor.
 
 Importante: no ejecutes `Install.bat` dentro del zip sin extraer.
 
 ## Uso Diario
 
-Briner se maneja desde dos lugares:
+NAP Files-Sorter se maneja desde dos lugares:
 
 - Icono de bandeja: circulo de color junto al reloj de Windows.
-- Briner Monitor: ventana con historial, estado y controles.
+- NAP Monitor: ventana con historial, estado y controles.
 
 No es necesario editar `config.yaml`, `.env` ni `user_settings.json` para uso normal.
 
@@ -36,7 +36,7 @@ No es necesario editar `config.yaml`, `.env` ni `user_settings.json` para uso no
 1. Escanea la carpeta monitoreada.
 2. Ignora archivos temporales y carpetas ya organizadas.
 3. Clasifica por reglas locales cuando hay evidencia clara.
-4. Si hay pocos archivos ambiguos, consulta Gemini individualmente con mas contexto.
+4. Si hay pocos archivos ambiguos, consulta el LLM individualmente con mas contexto.
 5. Si hay muchos archivos ambiguos, hace peticiones bulk para reducir costo y cuota.
 6. Usa metadatos y contenido parcial de documentos cuando es posible.
 7. Mueve archivos a carpetas numeradas.
@@ -53,14 +53,14 @@ No es necesario editar `config.yaml`, `.env` ni `user_settings.json` para uso no
 | `5. Trabajo y Empleo` | CVs, contratos, ofertas y procesos laborales |
 | `6. Documentos Personales` | Identificacion, impuestos, salud y finanzas |
 | `7. Varios\Documentos por Revisar` | Documentos sin evidencia suficiente |
-| `_Briner Quarantine` | Archivos basura o temporales retirados sin borrado permanente |
+| `_NAP Quarantine` | Archivos basura o temporales retirados sin borrado permanente |
 
 ## Seguridad de Archivos
 
-Briner no borra archivos permanentemente. La herramienta interna `delete_file` fue reemplazada por cuarentena:
+NAP Files-Sorter no borra archivos permanentemente. La herramienta interna `delete_file` mueve los archivos a cuarentena:
 
 ```text
-_Briner Quarantine\AAAA-MM
+_NAP Quarantine\AAAA-MM
 ```
 
 Si algo termina en cuarentena por error, puedes moverlo manualmente de vuelta.
@@ -84,11 +84,11 @@ Menu de clic derecho:
 - Pausar/Reanudar.
 - Deshacer ultimo movimiento.
 - Cambiar API key.
-- Detener Briner.
+- Detener NAP Files-Sorter.
 
-## Briner Monitor
+## NAP Monitor
 
-Briner Monitor permite manejar la app sin comandos:
+NAP Monitor permite manejar la app sin comandos:
 
 - Ver pendientes, procesados y errores.
 - Revisar los ultimos eventos.
@@ -98,31 +98,31 @@ Briner Monitor permite manejar la app sin comandos:
 - Deshacer ultimo movimiento.
 - Abrir `Documentos por Revisar`.
 - Abrir logs.
-- Cambiar API key.
+- Cambiar API key de Groq o Gemini.
 
-Cuando cambias la API key desde Monitor, BrinerBackground la recarga automaticamente mediante IPC. No hace falta reiniciar.
+Cuando cambias la API key desde Monitor, NAPBackground la recarga automaticamente mediante IPC. No hace falta reiniciar.
 
 ## Cambiar Carpeta Monitoreada
 
 Opcion recomendada:
 
-1. Abre Briner Monitor.
+1. Abre NAP Monitor.
 2. Pulsa `Cambiar carpeta`.
 3. Selecciona la nueva carpeta.
-4. Briner aplica el cambio en el siguiente ciclo inmediato.
+4. NAP Files-Sorter aplica el cambio en el siguiente ciclo inmediato.
 
 Tambien puedes hacerlo desde el icono de bandeja con `Cambiar carpeta...`.
 
-Si la carpeta anterior deja de existir, Briner se pausa y espera a que configures una carpeta valida.
+Si la carpeta anterior deja de existir, NAP Files-Sorter se pausa y espera a que configures una carpeta valida.
 
 ## Cambiar API Key
 
 Opcion recomendada:
 
-1. Abre Briner Monitor o el menu de bandeja.
-2. Pulsa `Cambiar API key`.
+1. Abre NAP Monitor o el menu de bandeja.
+2. Pulsa `API Groq` o `API Gemini`.
 3. Pega la nueva clave.
-4. Briner guarda `.env`, reinicia el cliente Gemini y limpia el circuit breaker.
+4. NAP Files-Sorter guarda `.env`, reinicia el cliente LLM y limpia el circuit breaker.
 
 ## Pausar, Reanudar y Forzar Escaneo
 
@@ -132,22 +132,22 @@ Opcion recomendada:
 
 ## Deshacer Ultimo Movimiento
 
-Desde Monitor o bandeja usa `Deshacer`. Briner mueve de vuelta el ultimo archivo movido y registra el evento en el historial.
+Desde Monitor o bandeja usa `Deshacer`. NAP Files-Sorter mueve de vuelta el ultimo archivo movido y registra el evento en el historial.
 
 ## Donde Guarda Datos
 
 En modo instalado, todo vive en:
 
 ```text
-%APPDATA%\Briner
+%APPDATA%\NAP Files-Sorter
 ```
 
 | Archivo/carpeta | Descripcion |
 |---|---|
-| `.env` | API key de Gemini |
+| `.env` | API keys de Groq y Gemini |
 | `user_settings.json` | Carpeta monitoreada y opciones basicas |
-| `briner.db` | Historial SQLite |
-| `logs\briner.log` | Logs tecnicos |
+| `nap.db` | Historial SQLite |
+| `logs\nap.log` | Logs tecnicos |
 | `commands\*.json` | Comandos pendientes entre Monitor/Tray y Background |
 | `.force_scan` | Senal simple de escaneo inmediato |
 
@@ -155,19 +155,19 @@ En modo instalado, todo vive en:
 
 ### No veo el icono
 
-Haz clic en la flecha de iconos ocultos junto al reloj de Windows. Si no aparece, abre Briner Monitor desde el escritorio.
+Haz clic en la flecha de iconos ocultos junto al reloj de Windows. Si no aparece, abre NAP Monitor desde el escritorio.
 
 ### Hay muchos pendientes
 
-Es normal en el primer arranque. Briner procesa por lotes hasta ponerse al dia.
+Es normal en el primer arranque. NAP Files-Sorter procesa por lotes hasta ponerse al dia.
 
-### Gemini dice cuota excedida
+### Groq dice cuota excedida
 
-Briner abre circuit breaker y reintenta automaticamente. Puedes esperar o cambiar API key.
+NAP Files-Sorter abre circuit breaker, conmuta automaticamente a Gemini (si esta configurado) y reintenta. Puedes esperar o cambiar API key.
 
 ### API key invalida
 
-Usa `Cambiar API key` desde Monitor o bandeja. No reinicies manualmente.
+Usa `API Groq` o `API Gemini` desde Monitor o bandeja. No reinicies manualmente.
 
 ### Quiero revisar decisiones dudosas
 
@@ -178,21 +178,21 @@ Abre `Documentos por Revisar` desde Monitor o bandeja. Los documentos ambiguos v
 Abre la carpeta monitoreada y busca:
 
 ```text
-_Briner Quarantine
+_NAP Quarantine
 ```
 
 Mueve el archivo manualmente a donde corresponda.
 
 ## Comandos Avanzados
 
-Desde `Briner\Briner.exe`:
+Desde `NAPSorter\NAPSorter.exe`:
 
 ```powershell
-.\Briner.exe --once
-.\Briner.exe --once --dry-run
-.\Briner.exe --metrics
-.\Briner.exe --undo-last
-.\Briner.exe --setup --watch-dir "D:\Descargas" --api-key "AIza..."
+.\NAPSorter.exe --once
+.\NAPSorter.exe --once --dry-run
+.\NAPSorter.exe --metrics
+.\NAPSorter.exe --undo-last
+.\NAPSorter.exe --setup --watch-dir "D:\Descargas"
 ```
 
 Estos comandos son para diagnostico o soporte; el uso normal se hace desde Monitor o bandeja.

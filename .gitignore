@@ -19,9 +19,9 @@ __pycache__/
 briner_agent/build/
 briner_agent/dist/
 release/
-briner_v*.zip
+nap_v*.zip
 
-# Runtime state (written to %APPDATA%\Briner when frozen)
+# Runtime state (written to %APPDATA%\NAP Files-Sorter when frozen)
 briner_agent/logs/
 briner_agent/**/logs/
 briner_agent/**/*.db

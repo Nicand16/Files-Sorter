@@ -1,11 +1,11 @@
-# Briner en Windows - Desarrollo y Build
+# NAP Files-Sorter en Windows - Desarrollo y Build
 
-Esta guia es para desarrollo local. Para usuarios finales usa `briner_v1.2.0.zip` y `Install.bat`.
+Esta guia es para desarrollo local. Para usuarios finales usa `nap_v1.7.0.zip` y `Install.bat`.
 
 ## Entorno
 
 ```powershell
-cd "C:\ruta\a\Files Sorter"
+cd "C:\ruta\a\Files-Sorter"
 python -m venv briner_agent\.venv
 briner_agent\.venv\Scripts\activate
 python -m pip install --upgrade pip
@@ -47,50 +47,50 @@ Resultado esperado para esta release:
 Desde `briner_agent`:
 
 ```powershell
-python -m PyInstaller --clean --noconfirm Briner.spec
-python -m PyInstaller --clean --noconfirm BrinerBackground.spec
-python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
+python -m PyInstaller --clean --noconfirm NAPSorter.spec
+python -m PyInstaller --clean --noconfirm NAPBackground.spec
+python -m PyInstaller --clean --noconfirm NAPMonitor.spec
 ```
 
 Artefactos esperados:
 
 ```text
-briner_agent\dist\Briner\Briner.exe
-briner_agent\dist\BrinerBackground\BrinerBackground.exe
-briner_agent\dist\BrinerMonitor\BrinerMonitor.exe
+briner_agent\dist\NAPSorter\NAPSorter.exe
+briner_agent\dist\NAPBackground\NAPBackground.exe
+briner_agent\dist\NAPMonitor\NAPMonitor.exe
 ```
 
-`Briner.exe` tiene consola para setup/diagnostico. `BrinerBackground.exe` corre sin consola. `BrinerMonitor.exe` es la UI para usuarios.
+`NAPSorter.exe` tiene consola para setup/diagnostico. `NAPBackground.exe` corre sin consola. `NAPMonitor.exe` es la UI para usuarios.
 
 ## Crear Release ZIP
 
 Desde la raiz del repo:
 
 ```powershell
-New-Item -ItemType Directory -Force release\briner_v1.2.0 | Out-Null
-Copy-Item -Recurse -Force briner_agent\dist\Briner,briner_agent\dist\BrinerBackground,briner_agent\dist\BrinerMonitor release\briner_v1.2.0\
-Copy-Item -Force Install.bat,README.md,README_WINDOWS.md,MANUAL_USO.md release\briner_v1.2.0\
-Compress-Archive -Path "release\briner_v1.2.0\*" -DestinationPath "briner_v1.2.0.zip" -Force
+New-Item -ItemType Directory -Force release\nap_v1.7.0 | Out-Null
+Copy-Item -Recurse -Force briner_agent\dist\NAPSorter,briner_agent\dist\NAPBackground,briner_agent\dist\NAPMonitor release\nap_v1.7.0\
+Copy-Item -Force Install.bat,README.md,README_WINDOWS.md,MANUAL_USO.md release\nap_v1.7.0\
+Compress-Archive -Path "release\nap_v1.7.0\*" -DestinationPath "nap_v1.7.0.zip" -Force
 ```
 
 Validacion minima:
 
 ```powershell
-Test-Path .\briner_v1.2.0.zip
-Test-Path .\briner_agent\dist\Briner\Briner.exe
-Test-Path .\briner_agent\dist\BrinerBackground\BrinerBackground.exe
-Test-Path .\briner_agent\dist\BrinerMonitor\BrinerMonitor.exe
-tar -tf .\briner_v1.2.0.zip | Select-String "README.md|README_WINDOWS.md|MANUAL_USO.md|Install.bat"
+Test-Path .\nap_v1.7.0.zip
+Test-Path .\briner_agent\dist\NAPSorter\NAPSorter.exe
+Test-Path .\briner_agent\dist\NAPBackground\NAPBackground.exe
+Test-Path .\briner_agent\dist\NAPMonitor\NAPMonitor.exe
+tar -tf .\nap_v1.7.0.zip | Select-String "README.md|README_WINDOWS.md|MANUAL_USO.md|Install.bat"
 ```
 
 ## Notas de Runtime
 
-- Configuracion del usuario: `%APPDATA%\Briner\user_settings.json`.
-- API key: `%APPDATA%\Briner\.env`.
-- Historial: `%APPDATA%\Briner\briner.db`.
-- Logs: `%APPDATA%\Briner\logs\briner.log`.
-- IPC Monitor/Tray/Background: `%APPDATA%\Briner\commands\*.json`.
-- Escaneo inmediato legacy: `%APPDATA%\Briner\.force_scan`.
+- Configuracion del usuario: `%APPDATA%\NAP Files-Sorter\user_settings.json`.
+- API key: `%APPDATA%\NAP Files-Sorter\.env`.
+- Base de datos: `%APPDATA%\NAP Files-Sorter\nap.db`.
+- Logs: `%APPDATA%\NAP Files-Sorter\logs\nap.log`.
+- IPC Monitor/Tray/Background: `%APPDATA%\NAP Files-Sorter\commands\*.json`.
+- Escaneo inmediato: `%APPDATA%\NAP Files-Sorter\.force_scan`.
 
 ## Modo Realtime Opcional
 

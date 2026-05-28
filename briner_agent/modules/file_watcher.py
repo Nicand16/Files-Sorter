@@ -10,7 +10,7 @@ from runtime.event_bus import FileEvent, FileState, bus
 logger = logging.getLogger(__name__)
 
 
-class BrinerEventHandler(FileSystemEventHandler):
+class NAPEventHandler(FileSystemEventHandler):
     """
     Sincroniza eventos del workspace con SQLite.
     Aplica debounce y evita reprocesar archivos ya movidos a carpetas de categoria.
@@ -40,7 +40,7 @@ class BrinerEventHandler(FileSystemEventHandler):
                 if logical_root not in aliases:
                     roots.add((self.watch_directory / logical_root).resolve())
         roots.add((self.watch_directory / "Varios").resolve())
-        roots.add((self.watch_directory / "_Briner Quarantine").resolve())
+        roots.add((self.watch_directory / "_NAP Quarantine").resolve())
         return roots
 
     def _is_ignored_filename(self, filepath: str | Path) -> bool:
@@ -176,7 +176,7 @@ class DirectoryMonitor:
         self.config = config or {}
         self.recursive = self.config.get("monitoring", {}).get("recursive", False)
         self.observer = Observer()
-        self.event_handler = BrinerEventHandler(db_manager, self.watch_directory, config)
+        self.event_handler = NAPEventHandler(db_manager, self.watch_directory, config)
 
     def scan_existing_files(self):
         self.watch_directory.mkdir(parents=True, exist_ok=True)

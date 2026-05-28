@@ -1,17 +1,17 @@
-# Briner - Organizador automatico de archivos
+# NAP Files-Sorter
 
-Briner organiza automaticamente una carpeta elegida por el usuario, normalmente Descargas. Corre en segundo plano, usa reglas locales y LLM (Groq como proveedor principal, Gemini como respaldo) cuando hace falta, y mueve los archivos a carpetas ordenadas sin que el usuario tenga que editar configuraciones.
+NAP Files-Sorter organiza automaticamente una carpeta elegida por el usuario, normalmente Descargas. Corre en segundo plano, usa reglas locales y LLM (Groq como proveedor principal, Gemini como respaldo) cuando hace falta, y mueve los archivos a carpetas ordenadas sin que el usuario tenga que editar configuraciones.
 
-Version actual: `1.6.0`.
+Version actual: `1.7.0`.
 
 ## Para Usuarios
 
-1. Descarga `briner_v1.6.0.zip` desde [Releases](https://github.com/Nicand16/Files-Sorter/releases/latest).
+1. Descarga `nap_v1.7.0.zip` desde [Releases](https://github.com/Nicand16/Files-Sorter/releases/latest).
 2. Extrae el zip completo.
 3. Ejecuta `Install.bat`.
 4. Selecciona la carpeta a organizar y pega tu API key de Groq (obligatoria) y opcionalmente la de Gemini.
 
-Despues de instalar, el usuario puede manejar lo importante desde Briner Monitor o desde el icono de bandeja:
+Despues de instalar, puedes manejar lo importante desde NAP Monitor o desde el icono de bandeja:
 
 - Cambiar carpeta monitoreada.
 - Cambiar API key de Groq o Gemini y recargarla sin reiniciar.
@@ -25,14 +25,14 @@ No se necesita Python en el equipo del usuario final.
 
 ## LLM con Fallback Inteligente
 
-Briner usa **Groq** como proveedor LLM principal (14.400 req/dia gratis) con **Gemini** como respaldo automatico. Si Groq falla, el agente conmuta a Gemini en tiempo real sin necesidad de reiniciar. Ambos proveedores tienen circuit breakers independientes con tiempos de recuperacion inteligentes.
+NAP Files-Sorter usa **Groq** como proveedor LLM principal (14.400 req/dia gratis) con **Gemini** como respaldo automatico. Si Groq falla, el agente conmuta a Gemini en tiempo real sin necesidad de reiniciar. Ambos proveedores tienen circuit breakers independientes con tiempos de recuperacion inteligentes.
 
 ## Seguridad
 
-Briner no borra archivos permanentemente. Si una herramienta de limpieza necesita retirar un archivo basura, lo mueve a:
+NAP Files-Sorter no borra archivos permanentemente. Si una herramienta de limpieza necesita retirar un archivo basura, lo mueve a:
 
 ```text
-_Briner Quarantine\AAAA-MM
+_NAP Quarantine\AAAA-MM
 ```
 
 Los documentos ambiguos no se mandan directamente a `Varios` cuando hay poca confianza. Se revisan con nombre, tipo, metadatos y contenido parcial; si siguen sin evidencia suficiente, van a:
@@ -57,7 +57,7 @@ Los documentos ambiguos no se mandan directamente a `Varios` cuando hay poca con
 
 | Documento | Descripcion |
 |---|---|
-| [MANUAL_USO.md](MANUAL_USO.md) | Guia para instalar y usar Briner como usuario final |
+| [MANUAL_USO.md](MANUAL_USO.md) | Guia para instalar y usar NAP Files-Sorter como usuario final |
 | [README_WINDOWS.md](README_WINDOWS.md) | Guia tecnica rapida para desarrollo/build en Windows |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Arquitectura, pipeline, IPC, base de datos y build |
 
@@ -77,13 +77,13 @@ Build local:
 
 ```powershell
 cd briner_agent
-python -m PyInstaller --clean --noconfirm Briner.spec
-python -m PyInstaller --clean --noconfirm BrinerBackground.spec
-python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
+python -m PyInstaller --clean --noconfirm NAPSorter.spec
+python -m PyInstaller --clean --noconfirm NAPBackground.spec
+python -m PyInstaller --clean --noconfirm NAPMonitor.spec
 ```
 
 Release:
 
 ```powershell
-Compress-Archive -Path "release\briner_v1.6.0\*" -DestinationPath "briner_v1.6.0.zip" -Force
+Compress-Archive -Path "release\nap_v1.7.0\*" -DestinationPath "nap_v1.7.0.zip" -Force
 ```

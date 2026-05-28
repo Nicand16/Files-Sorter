@@ -11,14 +11,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from modules.crud_executor import move_file_secure, quarantine_file_secure
-from modules.file_watcher import BrinerEventHandler
+from modules.file_watcher import NAPEventHandler
 from modules.multimodal_parser import collect_file_metadata, extract_document_content
 from modules.periodic_scanner import scan_directory_once
 from modules.rules_engine import classify_file, classify_file_context
 from runtime.commands import enqueue_command, iter_pending_commands, mark_command_done
 from core.settings_manager import validate_poll_interval, validate_watch_directory
 from db.database_manager import DatabaseManager
-from main import _run_interval_loop, get_briner_data_dir
+from main import _run_interval_loop, get_app_data_dir
 
 
 class RulesEngineTests(unittest.TestCase):
@@ -138,7 +138,7 @@ class MoveFileTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertFalse(source.exists())
-            self.assertIn("_Briner Quarantine", result["new_path"])
+            self.assertIn("_NAP Quarantine", result["new_path"])
             self.assertTrue(Path(result["new_path"]).exists())
 
 
@@ -157,19 +157,17 @@ class SettingsTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 validate_watch_directory(missing)
 
-
-
-    def test_get_briner_data_dir_uses_xdg_when_frozen_without_appdata(self):
+    def test_get_app_data_dir_uses_xdg_when_frozen_without_appdata(self):
         with patch.dict("main.os.environ", {"XDG_DATA_HOME": "/tmp/xdg"}, clear=True):
-            data_dir = get_briner_data_dir(is_frozen=True, home=Path("/home/tester"))
+            data_dir = get_app_data_dir(is_frozen=True, home=Path("/home/tester"))
 
-        self.assertEqual(data_dir, Path("/tmp/xdg/Briner").resolve())
+        self.assertEqual(data_dir, Path("/tmp/xdg/NAP Files-Sorter").resolve())
 
-    def test_get_briner_data_dir_honors_override(self):
-        with patch.dict("main.os.environ", {"BRINER_HOME": "~/custom_briner"}, clear=True):
-            data_dir = get_briner_data_dir(is_frozen=True, home=Path("/home/tester"))
+    def test_get_app_data_dir_honors_override(self):
+        with patch.dict("main.os.environ", {"NAP_HOME": "~/custom_nap"}, clear=True):
+            data_dir = get_app_data_dir(is_frozen=True, home=Path("/home/tester"))
 
-        self.assertEqual(data_dir, Path("/home/tester/custom_briner").resolve())
+        self.assertEqual(data_dir, Path("/home/tester/custom_nap").resolve())
 
 class FakeDb:
     def __init__(self):
@@ -225,7 +223,7 @@ class PeriodicScannerTests(unittest.TestCase):
             path = organized / "old.pdf"
             path.write_text("old", encoding="utf-8")
 
-            handler = BrinerEventHandler(
+            handler = NAPEventHandler(
                 FakeDb(),
                 root,
                 {
@@ -336,7 +334,7 @@ class SchemaTests(unittest.TestCase):
 class DatabaseRetryTests(unittest.TestCase):
     def test_register_file_stops_requeueing_after_three_errors(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "briner.db"
+            db_path = Path(temp_dir) / "nap.db"
             db = DatabaseManager(str(db_path))
             filepath = str((Path(temp_dir) / "file.txt").resolve())
 
@@ -361,7 +359,7 @@ class DatabaseRetryTests(unittest.TestCase):
 
     def test_recent_classification_decisions_feed_cache(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "briner.db"
+            db_path = Path(temp_dir) / "nap.db"
             db = DatabaseManager(str(db_path))
             filepath = str((Path(temp_dir) / "file.pdf").resolve())
 

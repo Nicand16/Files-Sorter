@@ -17,10 +17,10 @@ APP_DIR = Path(sys.executable).resolve().parent if IS_FROZEN else CODE_DIR
 RESOURCE_DIR = Path(getattr(sys, "_MEIPASS", CODE_DIR)).resolve()
 
 
-def get_briner_data_dir(*, is_frozen: bool, home: Path | None = None) -> Path:
-    """Return a writable app-data directory for Briner on any OS."""
+def get_app_data_dir(*, is_frozen: bool, home: Path | None = None) -> Path:
+    """Return a writable app-data directory for NAP Files-Sorter on any OS."""
     home_dir = Path.home() if home is None else Path(home)
-    override = os.environ.get("BRINER_HOME")
+    override = os.environ.get("NAP_HOME")
     if override:
         if override == "~" or override.startswith("~/") or override.startswith("~\\"):
             return (home_dir / override[2:]).resolve()
@@ -29,17 +29,17 @@ def get_briner_data_dir(*, is_frozen: bool, home: Path | None = None) -> Path:
     if is_frozen:
         appdata = os.environ.get("APPDATA")
         if appdata:
-            return (Path(appdata) / "Briner").resolve()
+            return (Path(appdata) / "NAP Files-Sorter").resolve()
         xdg_data = os.environ.get("XDG_DATA_HOME")
         if xdg_data:
-            return (Path(xdg_data) / "Briner").resolve()
-        return (home_dir / ".local" / "share" / "Briner").resolve()
+            return (Path(xdg_data) / "NAP Files-Sorter").resolve()
+        return (home_dir / ".local" / "share" / "NAP Files-Sorter").resolve()
 
     return CODE_DIR
 
 
 # State files (settings, db, logs) go to per-user app data when frozen so both exes share them.
-APPDATA_DIR = get_briner_data_dir(is_frozen=IS_FROZEN)
+APPDATA_DIR = get_app_data_dir(is_frozen=IS_FROZEN)
 if str(CODE_DIR) not in sys.path:
     sys.path.insert(0, str(CODE_DIR))
 
@@ -67,15 +67,15 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(LOG_DIR / "briner.log", encoding="utf-8"),
+        logging.FileHandler(LOG_DIR / "nap.log", encoding="utf-8"),
     ],
 )
-logger = logging.getLogger("BrinerMain")
+logger = logging.getLogger("NAPMain")
 
 
 def load_environment(force: bool = False):
-    env_logger = logging.getLogger("BrinerMain")
-    # When frozen, check APPDATA first (shared between Briner and BrinerBackground), then next to the exe.
+    env_logger = logging.getLogger("NAPMain")
+    # When frozen, check APPDATA first (shared between NAPSorter and NAPBackground), then next to the exe.
     env_paths = [APPDATA_DIR / ".env", APP_DIR / ".env"] if IS_FROZEN else [APP_DIR / ".env"]
 
     if load_dotenv:
@@ -138,25 +138,25 @@ def resolve_app_path(path_value: str | Path, base_dir: Path = APP_DIR) -> Path:
 
 
 def _find_background_exe() -> Path | None:
-    """Localiza BrinerBackground.exe junto a Briner.exe cuando corre como ejecutable."""
+    """Localiza NAPBackground.exe junto a NAPSorter.exe cuando corre como ejecutable."""
     if not IS_FROZEN:
         return None
-    candidate = Path(sys.executable).parent.parent / "BrinerBackground" / "BrinerBackground.exe"
+    candidate = Path(sys.executable).parent.parent / "NAPBackground" / "NAPBackground.exe"
     return candidate if candidate.exists() else None
 
 
 def _install_startup_shortcut() -> bool:
-    """Crea el acceso directo en la carpeta Startup de Windows para BrinerBackground.exe."""
+    """Crea el acceso directo en la carpeta Startup de Windows para NAPBackground.exe."""
     bg_exe = _find_background_exe()
     if not bg_exe:
-        logger.warning("BrinerBackground.exe no encontrado. Instala el inicio automatico manualmente.")
+        logger.warning("NAPBackground.exe no encontrado. Instala el inicio automatico manualmente.")
         return False
 
     bg_exe_str = str(bg_exe).replace("'", "''")
     working_dir = str(bg_exe.parent).replace("'", "''")
     ps_cmd = (
         "$startup = [Environment]::GetFolderPath('Startup'); "
-        "$lnk = Join-Path $startup 'Briner.lnk'; "
+        "$lnk = Join-Path $startup 'NAP Files-Sorter.lnk'; "
         "$shell = New-Object -ComObject WScript.Shell; "
         "$link = $shell.CreateShortcut($lnk); "
         f"$link.TargetPath = '{bg_exe_str}'; "
@@ -184,7 +184,7 @@ def _install_startup_shortcut() -> bool:
 
 
 def build_arg_parser():
-    parser = argparse.ArgumentParser(description="Briner file organizer")
+    parser = argparse.ArgumentParser(description="NAP Files-Sorter file organizer")
     parser.add_argument("--once", action="store_true", help="Escanea y procesa una sola vez.")
     parser.add_argument("--no-scan", action="store_true", help="No registra archivos existentes al arrancar.")
     parser.add_argument("--dry-run", action="store_true", help="Propone movimientos sin tocar archivos.")
@@ -198,7 +198,7 @@ def build_arg_parser():
 
 
 class RuntimeCommandProcessor:
-    """Consumes UI commands written by BrinerMonitor/Tray without requiring restarts."""
+    """Consumes UI commands written by NAPMonitor/Tray without requiring restarts."""
 
     def __init__(
         self,
@@ -262,25 +262,25 @@ class RuntimeCommandProcessor:
                     self.reset_llm_callback()
                     if tray and hasattr(tray, "clear_error"):
                         tray.clear_error()
-                    self._notify(tray, "Briner", "API key actualizada.")
+                    self._notify(tray, "NAP Files-Sorter", "API key actualizada.")
                     result["force_scan"] = True
                 elif command_type == "change_workspace":
                     self._set_workspace(payload.get("workspace_dir", ""), tray=tray)
-                    self._notify(tray, "Briner", f"Carpeta monitoreada actualizada: {self.workspace_dir}")
+                    self._notify(tray, "NAP Files-Sorter", f"Carpeta monitoreada actualizada: {self.workspace_dir}")
                     result["workspace_changed"] = True
                     result["force_scan"] = True
                 elif command_type == "pause":
                     self.paused = True
-                    self._notify(tray, "Briner", "Organizacion pausada.")
+                    self._notify(tray, "NAP Files-Sorter", "Organizacion pausada.")
                 elif command_type == "resume":
                     self.paused = False
-                    self._notify(tray, "Briner", "Organizacion reanudada.")
+                    self._notify(tray, "NAP Files-Sorter", "Organizacion reanudada.")
                     result["force_scan"] = True
                 elif command_type == "undo_last":
                     from modules.history import undo_last_move
 
                     message = undo_last_move(self.db, self.workspace_dir, dry_run=self.config.get("monitoring", {}).get("dry_run", False))
-                    self._notify(tray, "Briner - Deshacer", message)
+                    self._notify(tray, "NAP Files-Sorter - Deshacer", message)
                     result["force_scan"] = True
                 else:
                     logger.warning("Comando desconocido ignorado: %s", command_type)
@@ -419,7 +419,7 @@ def _run_interval_loop(orchestrator, db_manager, workspace_dir: Path, config: di
                         _sentinel.unlink()
                     except OSError:
                         pass
-                    logger.info("Escaneo forzado recibido desde BrinerMonitor.")
+                    logger.info("Escaneo forzado recibido desde NAPMonitor.")
                     break
                 time.sleep(1)
             if force_scan_event:
@@ -467,7 +467,7 @@ def _run_realtime_loop(orchestrator, db_manager, workspace_dir: Path, config: di
                     _rt_sentinel.unlink()
                 except OSError:
                     pass
-                logger.info("Escaneo forzado recibido desde BrinerMonitor (realtime).")
+                logger.info("Escaneo forzado recibido desde NAPMonitor (realtime).")
                 scan_directory_once(workspace_dir, db_manager, config)
             try:
                 if tray:
@@ -543,7 +543,7 @@ def _run_startup_checks(workspace_dir: Path, orchestrator, tray=None) -> bool:
 def main():
     _t0_main = time.perf_counter()
     args = build_arg_parser().parse_args()
-    logger.info("Iniciando Briner - Agente Autonomo de Gestion de Archivos")
+    logger.info("Iniciando NAP Files-Sorter - Agente Autonomo de Gestion de Archivos")
 
     config_path = APP_DIR / "config.yaml"
     if not config_path.exists():
@@ -576,11 +576,11 @@ def main():
         logger.info("Primera configuracion detectada. Instalando inicio automatico...")
         ok = _install_startup_shortcut()
         if ok:
-            print("\n  Inicio automatico instalado. Briner se ejecutara al iniciar Windows.")
+            print("\n  Inicio automatico instalado. NAP Files-Sorter se ejecutara al iniciar Windows.")
         else:
             print("\n  No se pudo instalar el inicio automatico.")
             print("  Puedes hacerlo manualmente ejecutando:")
-            print("    briner_agent\\scripts\\install_startup.bat")
+            print("    nap_agent\\scripts\\install_startup.bat")
         if args.setup:
             print("\nConfiguracion completada. Puedes cerrar esta ventana.\n")
             return
@@ -594,9 +594,9 @@ def main():
     workspace_dir = resolve_app_path(monitoring.get("workspace_dir", "./workspace"))
     # DB path: APPDATA when frozen (shared), local db folder when running as script.
     if IS_FROZEN:
-        db_path = APPDATA_DIR / "briner.db"
+        db_path = APPDATA_DIR / "nap.db"
     else:
-        db_path = resolve_app_path(config.get("database", {}).get("sqlite_path", "./db/briner.db"))
+        db_path = resolve_app_path(config.get("database", {}).get("sqlite_path", "./db/nap.db"))
     monitoring["workspace_dir"] = str(workspace_dir)
     poll_interval = monitoring.get("poll_interval", 120)
     mode = monitoring.get("mode", "interval")
@@ -630,18 +630,18 @@ def main():
         print(undo_last_move(db_manager, workspace_dir, dry_run=dry_run))
         return
 
-    from core.agent_orchestrator import BrinerOrchestrator
+    from core.agent_orchestrator import NAPOrchestrator
     from infra.metrics import M_STARTUP_LATENCY, metrics
 
-    orchestrator = BrinerOrchestrator(config=config, db_manager=db_manager, workspace_dir=workspace_dir)
+    orchestrator = NAPOrchestrator(config=config, db_manager=db_manager, workspace_dir=workspace_dir)
     _startup_latency = time.perf_counter() - _t0_main
     metrics.record(M_STARTUP_LATENCY, _startup_latency)
-    logger.info("=== Briner configuracion activa ===")
+    logger.info("=== NAP Files-Sorter configuracion activa ===")
     logger.info("Workspace: %s | Existe: %s", workspace_dir, workspace_dir.exists())
     logger.info("Dry-run: %s | Modo: %s | Recursivo: %s", dry_run, mode, monitoring.get("recursive", False))
     logger.info("LLM: lazy (se inicializara al primer archivo ambiguo)")
     logger.info("Startup latency (orquestador listo): %.1f ms", _startup_latency * 1000)
-    logger.info("===================================")
+    logger.info("=============================================")
 
     stop_event = threading.Event()
     force_scan_event = threading.Event()
@@ -680,16 +680,16 @@ def main():
                                    poll_interval, once=True, stop_event=stop_event,
                                    force_scan_event=force_scan_event, command_processor=command_processor)
         except KeyboardInterrupt:
-            logger.info("Briner se ha detenido correctamente por orden del usuario.")
+            logger.info("NAP Files-Sorter se ha detenido correctamente por orden del usuario.")
         return
 
     # Background (continuous) mode —
     # pystray.Icon.run() MUST execute on the main thread on Windows (frozen, console=False).
     tray = None
     try:
-        from modules.tray_icon import BrinerTrayIcon
+        from modules.tray_icon import NAPTrayIcon
 
-        tray = BrinerTrayIcon(
+        tray = NAPTrayIcon(
             workspace_dir=workspace_dir,
             appdata_dir=APPDATA_DIR,
             stop_event=stop_event,
@@ -721,7 +721,7 @@ def main():
             logger.exception("Error fatal en loop de procesamiento: %s", exc)
             stop_event.set()
 
-    bg = threading.Thread(target=_bg_loop, daemon=True, name="BrinerLoop")
+    bg = threading.Thread(target=_bg_loop, daemon=True, name="NAPLoop")
     bg.start()
 
     if tray:
@@ -737,7 +737,7 @@ def main():
         try:
             bg.join()
         except KeyboardInterrupt:
-            logger.info("Briner se ha detenido correctamente por orden del usuario.")
+            logger.info("NAP Files-Sorter se ha detenido correctamente por orden del usuario.")
             stop_event.set()
 
 

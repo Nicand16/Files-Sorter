@@ -267,7 +267,7 @@ def quarantine_file_secure(
             logger.error(message)
             return {"ok": False, "error_code": "workspace_mismatch", "message": message}
 
-        quarantine_dir = workspace / "_Briner Quarantine" / time.strftime("%Y-%m")
+        quarantine_dir = workspace / "_NAP Quarantine" / time.strftime("%Y-%m")
         dest_path = _unique_destination(quarantine_dir / path.name)
         if dry_run:
             return {
@@ -300,7 +300,7 @@ def build_delete_file_tool(
     @tool
     def delete_file(file_path: str) -> str:
         """
-        Mueve un archivo basura o temporal a _Briner Quarantine.
+        Mueve un archivo basura o temporal a _NAP Quarantine.
         No elimina permanentemente archivos del usuario.
         """
         result = quarantine_file_secure(file_path, workspace_root, dry_run)

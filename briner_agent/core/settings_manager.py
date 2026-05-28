@@ -90,8 +90,8 @@ def create_settings_for_dir(folder: str, settings_path: str | Path) -> dict:
 
 
 def prompt_for_initial_settings(settings_path: str | Path) -> dict:
-    print("\n=== Briner - Configuracion inicial ===\n")
-    print("Briner organizara automaticamente los archivos de la carpeta que elijas.")
+    print("\n=== NAP Files-Sorter - Configuracion inicial ===\n")
+    print("NAP Files-Sorter organizara automaticamente los archivos de la carpeta que elijas.")
     print("El escaneo se realizara cada hora. Solo necesitas indicar la carpeta.\n")
     while True:
         folder = input("Carpeta a organizar (ej. C:\\Users\\tu_usuario\\Downloads): ").strip().strip('"')
