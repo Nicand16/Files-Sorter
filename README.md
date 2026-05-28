@@ -1,20 +1,20 @@
 # Briner - Organizador automatico de archivos
 
-Briner organiza automaticamente una carpeta elegida por el usuario, normalmente Descargas. Corre en segundo plano, usa reglas locales y Gemini cuando hace falta, y mueve los archivos a carpetas ordenadas sin que el usuario tenga que editar configuraciones.
+Briner organiza automaticamente una carpeta elegida por el usuario, normalmente Descargas. Corre en segundo plano, usa reglas locales y LLM (Groq como proveedor principal, Gemini como respaldo) cuando hace falta, y mueve los archivos a carpetas ordenadas sin que el usuario tenga que editar configuraciones.
 
-Version actual: `1.2.0`.
+Version actual: `1.6.0`.
 
 ## Para Usuarios
 
-1. Descarga `briner_v1.2.0.zip`.
+1. Descarga `briner_v1.6.0.zip` desde [Releases](https://github.com/Nicand16/Files-Sorter/releases/latest).
 2. Extrae el zip completo.
 3. Ejecuta `Install.bat`.
-4. Selecciona la carpeta a organizar y pega tu API key de Gemini.
+4. Selecciona la carpeta a organizar y pega tu API key de Groq (obligatoria) y opcionalmente la de Gemini.
 
 Despues de instalar, el usuario puede manejar lo importante desde Briner Monitor o desde el icono de bandeja:
 
 - Cambiar carpeta monitoreada.
-- Cambiar API key y recargarla sin reiniciar.
+- Cambiar API key de Groq o Gemini y recargarla sin reiniciar.
 - Pausar o reanudar la organizacion.
 - Forzar un escaneo inmediato.
 - Deshacer el ultimo movimiento.
@@ -22,6 +22,10 @@ Despues de instalar, el usuario puede manejar lo importante desde Briner Monitor
 - Ver logs e historial.
 
 No se necesita Python en el equipo del usuario final.
+
+## LLM con Fallback Inteligente
+
+Briner usa **Groq** como proveedor LLM principal (14.400 req/dia gratis) con **Gemini** como respaldo automatico. Si Groq falla, el agente conmuta a Gemini en tiempo real sin necesidad de reiniciar. Ambos proveedores tienen circuit breakers independientes con tiempos de recuperacion inteligentes.
 
 ## Seguridad
 
@@ -81,5 +85,5 @@ python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
 Release:
 
 ```powershell
-Compress-Archive -Path "release\briner_v1.2.0\*" -DestinationPath "briner_v1.2.0.zip" -Force
+Compress-Archive -Path "release\briner_v1.6.0\*" -DestinationPath "briner_v1.6.0.zip" -Force
 ```
