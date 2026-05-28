@@ -78,9 +78,9 @@ def _resolve_workspace(workspace_value: str | Path) -> Path:
     return path.resolve()
 
 
-class BrinerOrchestrator:
+class NAPOrchestrator:
     """
-    Orquestador principal del agente Briner.
+    Orquestador principal del agente NAP Files-Sorter.
 
     Flujo de procesamiento en 3 fases:
       1. Reglas deterministicas (sin API) -- extension/keyword -> movimiento directo.
@@ -142,7 +142,7 @@ class BrinerOrchestrator:
         self._gemini_llm = None
         self._llm_initialized = False
         self._llm_init_lock = threading.Lock()
-        self._llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="BrinerLLMInvoke")
+        self._llm_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="NAPLLMInvoke")
         self.agent = None  # set lazily when LLM first initializes
         # Dual circuit breakers — one per provider
         from runtime.circuit_breaker import CircuitBreaker
@@ -321,7 +321,7 @@ class BrinerOrchestrator:
 
     def _initialize_agent(self):
         if not create_react_agent:
-            logger.warning("LangGraph no esta instalado. Briner correra solo con reglas y fallback local.")
+            logger.warning("LangGraph no esta instalado. NAP Files-Sorter correra solo con reglas y fallback local.")
             return None
         if not self.llm:
             logger.error("Orquestador no pudo arrancar el Agente: Motor LLM no disponible.")
@@ -333,7 +333,7 @@ class BrinerOrchestrator:
         self.tools = get_crud_tools(self.workspace_root, self.dry_run, self.destination_aliases) + get_parser_tools()
 
         taxonomy_prompt = build_taxonomy_prompt(self.config)
-        system_prompt = f"""Eres Briner, un agente de IA autonomo experto en la gestion inteligente de archivos.
+        system_prompt = f"""Eres NAP Files-Sorter, un agente de IA autonomo experto en la gestion inteligente de archivos.
 Tu mision es organizar el directorio de trabajo del usuario siguiendo ESTRICTAMENTE esta taxonomia:
 
 {taxonomy_prompt}
@@ -746,7 +746,7 @@ REGLAS DE OPERACION:
             consume_thread_moves()
             response = self.agent.invoke({"messages": [("user", prompt_input)]})
             resultado = response["messages"][-1].content
-            logger.info("[Respuesta de Briner para %s]:\n%s", filename, resultado)
+            logger.info("[Respuesta NAP para %s]:\n%s", filename, resultado)
             tool_moves = consume_thread_moves()
             successful_moves = [move for move in tool_moves if move.get("ok")]
             if successful_moves:

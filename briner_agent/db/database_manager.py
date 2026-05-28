@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
-    """Gestiona la conexion y operaciones CRUD para la base de datos de Briner."""
+    """Gestiona la conexion y operaciones CRUD para la base de datos de NAP Files-Sorter."""
 
     def __init__(self, db_path: str):
         self.db_path = Path(db_path)

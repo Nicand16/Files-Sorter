@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 echo.
 echo  =====================================================
-echo    Briner - Compilador de ejecutables
+echo    NAP Files-Sorter - Compilador de ejecutables
 echo  =====================================================
 echo.
 
@@ -31,28 +31,28 @@ if errorlevel 1 (
 )
 
 echo.
-echo  Compilando Briner.exe (con consola para configuracion)...
-python -m PyInstaller --clean --noconfirm Briner.spec
+echo  Compilando NAPSorter.exe (con consola para configuracion)...
+python -m PyInstaller --clean --noconfirm NAPSorter.spec
 if errorlevel 1 (
-    echo  ERROR al compilar Briner.exe
+    echo  ERROR al compilar NAPSorter.exe
     pause
     exit /b 1
 )
 
 echo.
-echo  Compilando BrinerBackground.exe (sin consola, para segundo plano)...
-python -m PyInstaller --clean --noconfirm BrinerBackground.spec
+echo  Compilando NAPBackground.exe (sin consola, para segundo plano)...
+python -m PyInstaller --clean --noconfirm NAPBackground.spec
 if errorlevel 1 (
-    echo  ERROR al compilar BrinerBackground.exe
+    echo  ERROR al compilar NAPBackground.exe
     pause
     exit /b 1
 )
 
 echo.
-echo  Compilando BrinerMonitor.exe (ventana de monitoreo en tiempo real)...
-python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
+echo  Compilando NAPMonitor.exe (ventana de monitoreo en tiempo real)...
+python -m PyInstaller --clean --noconfirm NAPMonitor.spec
 if errorlevel 1 (
-    echo  ERROR al compilar BrinerMonitor.exe
+    echo  ERROR al compilar NAPMonitor.exe
     pause
     exit /b 1
 )
@@ -62,8 +62,8 @@ echo  =====================================================
 echo    Compilacion exitosa
 echo  =====================================================
 echo.
-echo  dist\Briner\Briner.exe                          (setup y diagnostico)
-echo  dist\BrinerBackground\BrinerBackground.exe      (servicio en fondo)
-echo  dist\BrinerMonitor\BrinerMonitor.exe            (monitor en tiempo real)
+echo  dist\NAPSorter\NAPSorter.exe                  (setup y diagnostico)
+echo  dist\NAPBackground\NAPBackground.exe          (servicio en fondo)
+echo  dist\NAPMonitor\NAPMonitor.exe                (monitor en tiempo real)
 echo.
 pause

@@ -1,18 +1,18 @@
-# Briner — Arquitectura y guía técnica
+﻿# NAP Files-Sorter — Arquitectura y guía técnica
 
-Este documento describe en detalle la lógica, estructura y decisiones de diseño de Briner. Está pensado como referencia completa para que un desarrollador o un LLM pueda entender qué hace cada parte del sistema y cómo modificarla.
-
----
-
-## Qué hace Briner
-
-Briner es un agente autónomo de organización de archivos para Windows. Monitorea una carpeta configurada por el usuario (típicamente Descargas), clasifica cada archivo nuevo mediante reglas deterministas y/o IA (Google Gemini), y lo mueve a una subcarpeta de destino según su tipo. Se ejecuta en segundo plano, arranca con Windows, y expone su estado mediante un ícono en la bandeja del sistema y una ventana de monitoreo.
+Este documento describe en detalle la lógica, estructura y decisiones de diseño de NAP Files-Sorter. Está pensado como referencia completa para que un desarrollador o un LLM pueda entender qué hace cada parte del sistema y cómo modificarla.
 
 ---
 
-## Estado actual v1.2.0
+## Qué hace NAP Files-Sorter
 
-La app esta orientada a usuarios finales: solo deben cambiar la carpeta monitoreada o la API key cuando sea necesario. El resto se maneja desde Briner Monitor o desde el icono de bandeja mediante comandos IPC:
+NAP Files-Sorter es un agente autónomo de organización de archivos para Windows. Monitorea una carpeta configurada por el usuario (típicamente Descargas), clasifica cada archivo nuevo mediante reglas deterministas y/o IA (Google Gemini), y lo mueve a una subcarpeta de destino según su tipo. Se ejecuta en segundo plano, arranca con Windows, y expone su estado mediante un ícono en la bandeja del sistema y una ventana de monitoreo.
+
+---
+
+## Estado actual v1.7.0
+
+La app esta orientada a usuarios finales: solo deben cambiar la carpeta monitoreada o la API key cuando sea necesario. El resto se maneja desde NAP Monitor o desde el icono de bandeja mediante comandos IPC:
 
 - Cambiar carpeta monitoreada sin editar JSON.
 - Cambiar API key y recargar Gemini sin reiniciar.
@@ -20,32 +20,32 @@ La app esta orientada a usuarios finales: solo deben cambiar la carpeta monitore
 - Forzar escaneo inmediato.
 - Deshacer el ultimo movimiento.
 - Abrir `7. Varios/Documentos por Revisar`.
-- Retirar basura a `_Briner Quarantine` sin borrado permanente.
+- Retirar basura a `_NAP Quarantine` sin borrado permanente.
 - Precargar cache de decisiones desde SQLite al arrancar.
 
 ---
 
 ## Componentes del sistema
 
-El sistema se distribuye como tres ejecutables independientes que comparten un directorio de datos en `%APPDATA%\Briner\`:
+El sistema se distribuye como tres ejecutables independientes que comparten un directorio de datos en `%APPDATA%\NAP Files-Sorter\`:
 
-### `Briner.exe` — Consola de configuración y diagnóstico
+### `NAPSorter.exe` — Consola de configuración y diagnóstico
 - Tiene consola visible (stdout/stderr).
 - Se usa para: configuración inicial (`--setup`), pasadas manuales (`--once`), diagnóstico (`--metrics`), deshacer último movimiento (`--undo-last`).
-- Comparte exactamente el mismo código fuente (`main.py`) que BrinerBackground; la diferencia es solo `console=True` en el spec de PyInstaller.
+- Comparte exactamente el mismo código fuente (`main.py`) que NAPBackground; la diferencia es solo `console=True` en el spec de PyInstaller.
 
-### `BrinerBackground.exe` — Servicio en segundo plano
+### `NAPBackground.exe` — Servicio en segundo plano
 - Sin consola visible (`console=False`).
 - Se lanza con `--no-wizard` para evitar el wizard interactivo.
 - Es el proceso que realmente organiza los archivos de forma continua.
 - Arranca con Windows mediante un acceso directo en `Startup`.
 - Corre el ícono de la bandeja del sistema en el hilo principal (requisito de Win32) y el loop de procesamiento en un hilo daemon.
 
-### `BrinerMonitor.exe` — Ventana de monitoreo
+### `NAPMonitor.exe` — Ventana de monitoreo
 - Sin consola visible; interfaz gráfica Tkinter + pystray.
 - Lee la base de datos SQLite compartida en modo solo lectura.
 - Muestra los últimos 100 eventos de clasificación, contadores y estado.
-- Se comunica con BrinerBackground mediante un archivo centinela (`.force_scan`) para forzar escaneos.
+- Se comunica con NAPBackground mediante un archivo centinela (`.force_scan`) para forzar escaneos.
 - Minimizar oculta la ventana a la bandeja del sistema (no a la barra de tareas).
 - Código fuente: `briner_agent/monitor.py` (archivo independiente, no comparte código con `main.py`).
 
@@ -60,14 +60,14 @@ Files Sorter/
 ├── ARCHITECTURE.md                      ← Este archivo
 ├── README.md                            ← Resumen del proyecto
 └── briner_agent/
-    ├── main.py                          ← Punto de entrada único (Briner.exe y BrinerBackground.exe)
-    ├── monitor.py                       ← Punto de entrada de BrinerMonitor.exe
+    ├── main.py                          ← Punto de entrada único (NAPSorter.exe y NAPBackground.exe)
+    ├── monitor.py                       ← Punto de entrada de NAPMonitor.exe
     ├── config.yaml                      ← Configuración base + taxonomía (se empaqueta en el exe)
     ├── requirements.txt
     ├── build_all.bat                    ← Compila los 3 exes con PyInstaller
-    ├── Briner.spec                      ← Spec PyInstaller para Briner.exe (console=True)
-    ├── BrinerBackground.spec            ← Spec PyInstaller para BrinerBackground.exe (console=False)
-    ├── BrinerMonitor.spec               ← Spec PyInstaller para BrinerMonitor.exe (console=False)
+    ├── NAPSorter.spec                      ← Spec PyInstaller para NAPSorter.exe (console=True)
+    ├── NAPBackground.spec            ← Spec PyInstaller para NAPBackground.exe (console=False)
+    ├── NAPMonitor.spec               ← Spec PyInstaller para NAPMonitor.exe (console=False)
     ├── rthook_fix_socket.py             ← Runtime hook para socket en exes frozen
     ├── core/
     │   ├── agent_orchestrator.py        ← Pipeline de clasificación 3 fases + circuit breaker
@@ -102,30 +102,30 @@ Files Sorter/
 
 ---
 
-## Directorio de datos compartido (`%APPDATA%\Briner\`)
+## Directorio de datos compartido (`%APPDATA%\NAP Files-Sorter\`)
 
-Todos los archivos de estado se guardan aquí. Tanto `Briner.exe` como `BrinerBackground.exe` y `BrinerMonitor.exe` apuntan al mismo directorio.
+Todos los archivos de estado se guardan aquí. Tanto `NAPSorter.exe` como `NAPBackground.exe` y `NAPMonitor.exe` apuntan al mismo directorio.
 
 ```
-%APPDATA%\Briner\
+%APPDATA%\NAP Files-Sorter\
 ├── .env                    ← GOOGLE_API_KEY=...  (cargado con python-dotenv)
 ├── user_settings.json      ← Carpeta monitoreada, intervalo, modo, dry_run
-├── briner.db               ← Base de datos SQLite
-├── .force_scan             ← Archivo centinela IPC: BrinerMonitor lo crea, BrinerBackground lo consume
+├── nap.db               ← Base de datos SQLite
+├── .force_scan             ← Archivo centinela IPC: NAPMonitor lo crea, NAPBackground lo consume
 └── logs/
-    └── briner.log          ← Log de actividad (INFO+)
+    └── nap.log          ← Log de actividad (INFO+)
 ```
 
-Desde v1.2.0 tambien existe `%APPDATA%\Briner\commands\`, una cola de comandos JSON usada por BrinerMonitor y la bandeja para pedir acciones al proceso background: cambiar carpeta, recargar API key, pausar/reanudar, forzar escaneo y deshacer ultimo movimiento. `.force_scan` queda como senal simple compatible para escaneos inmediatos.
+Desde v1.7.0 tambien existe `%APPDATA%\NAP Files-Sorter\commands\`, una cola de comandos JSON usada por NAPMonitor y la bandeja para pedir acciones al proceso background: cambiar carpeta, recargar API key, pausar/reanudar, forzar escaneo y deshacer ultimo movimiento. `.force_scan` queda como senal simple compatible para escaneos inmediatos.
 
-En modo dev (sin frozen), `APPDATA_DIR` apunta al propio directorio `briner_agent/` y la DB se ubica en `briner_agent/db/briner.db`.
+En modo dev (sin frozen), `APPDATA_DIR` apunta al propio directorio `briner_agent/` y la DB se ubica en `briner_agent/db/nap.db`.
 
 ---
 
 ## Base de datos SQLite
 
 ### Tabla `files`
-Registro de cada archivo visto por Briner.
+Registro de cada archivo visto por NAP Files-Sorter.
 
 | Columna | Tipo | Descripción |
 |---|---|---|
@@ -267,7 +267,7 @@ get_pending_files(limit=500)
          └─ Agente LangGraph ReAct, 1 archivo a la vez (último recurso)
 ```
 
-En v1.2.0 la fase de ambiguos usa capas adicionales:
+En v1.7.0 la fase de ambiguos usa capas adicionales:
 
 - Cache en memoria precargado desde SQLite con decisiones recientes.
 - `collect_file_metadata()` extrae tipo MIME, tamano, fechas, metadatos PDF/Office/imagen/ZIP y preview de contenido.
@@ -275,7 +275,7 @@ En v1.2.0 la fase de ambiguos usa capas adicionales:
 - Si hay pocos ambiguos (`llm_individual_threshold <= 6`), Gemini se consulta archivo por archivo con contexto amplio.
 - Si hay muchos ambiguos, Gemini se consulta en bulk con previews compactos.
 - `Varios` no se cachea y los documentos sin evidencia suficiente van a `Varios/Documentos por Revisar`.
-- Las herramientas LLM nunca borran permanentemente: `delete_file` mueve a `_Briner Quarantine`.
+- Las herramientas LLM nunca borran permanentemente: `delete_file` mueve a `_NAP Quarantine`.
 
 ### Movimiento de archivos (`crud_executor.py`)
 
@@ -290,20 +290,20 @@ En v1.2.0 la fase de ambiguos usa capas adicionales:
 ## Comunicación entre procesos (IPC)
 
 ### Archivo centinela `.force_scan`
-- **Creador:** BrinerMonitor (botón "⚡ Forzar escaneo") o el ícono de bandeja (opción "Forzar escaneo ahora").
-- **Consumidor:** BrinerBackground, que lo comprueba en cada iteración del sleep loop (cada 1 segundo en modo interval, cada iteración del loop en modo realtime).
+- **Creador:** NAPMonitor (botón "⚡ Forzar escaneo") o el ícono de bandeja (opción "Forzar escaneo ahora").
+- **Consumidor:** NAPBackground, que lo comprueba en cada iteración del sleep loop (cada 1 segundo en modo interval, cada iteración del loop en modo realtime).
 - **Efecto:** interrumpe el sleep de `poll_interval` y lanza un ciclo inmediato.
-- **Ruta:** `%APPDATA%\Briner\.force_scan`
+- **Ruta:** `%APPDATA%\NAP Files-Sorter\.force_scan`
 
 ### Cola de comandos `commands/*.json`
-- **Creador:** BrinerMonitor y BrinerTrayIcon mediante `runtime.commands.enqueue_command()`.
+- **Creador:** NAPMonitor y BrinerTrayIcon mediante `runtime.commands.enqueue_command()`.
 - **Consumidor:** `RuntimeCommandProcessor` en `main.py`.
 - **Comandos:** `force_scan`, `reload_api_key`, `change_workspace`, `pause`, `resume`, `undo_last`.
-- **Efecto:** permite que el usuario final controle Briner sin reiniciar y sin editar archivos manualmente.
-- **Ruta:** `%APPDATA%\Briner\commands\*.json`
+- **Efecto:** permite que el usuario final controle NAP Files-Sorter sin reiniciar y sin editar archivos manualmente.
+- **Ruta:** `%APPDATA%\NAP Files-Sorter\commands\*.json`
 
 ### Base de datos SQLite (compartida)
-BrinerMonitor accede a la DB en modo solo lectura (`mode=ro` en la URI de conexión) para mostrar el estado. BrinerBackground tiene acceso de escritura.
+NAPMonitor accede a la DB en modo solo lectura (`mode=ro` en la URI de conexión) para mostrar el estado. NAPBackground tiene acceso de escritura.
 
 ---
 
@@ -379,7 +379,7 @@ self.agent = None  # agente ReAct, también lazy
 
 ## Modo dry-run
 
-Cuando `dry_run=True` en la configuración, Briner clasifica normalmente pero **no mueve** ningún archivo. Los eventos se registran en `classification_events` con `dry_run=1`. Útil para verificar la taxonomía antes de aplicarla.
+Cuando `dry_run=True` en la configuración, NAP Files-Sorter clasifica normalmente pero **no mueve** ningún archivo. Los eventos se registran en `classification_events` con `dry_run=1`. Útil para verificar la taxonomía antes de aplicarla.
 
 ---
 
@@ -403,16 +403,16 @@ Cuando `dry_run=True` en la configuración, Briner clasifica normalmente pero **
 
 Los tres specs de PyInstaller viven en `briner_agent/`:
 
-### `BrinerBackground.spec`
+### `NAPBackground.spec`
 - `console=False`
 - `datas=[('config.yaml', '.'), ('db/schema.sql', 'db')]` — empaqueta la configuración base y el schema SQL dentro del exe.
 - `hiddenimports` incluye: `langchain_google_genai`, `langgraph`, `pystray._win32`, `PIL`, todos los módulos locales de `infra`, `runtime`, `classifiers`.
 - `runtime_hooks=['rthook_fix_socket.py']` — workaround para socket en exes frozen en Windows.
 
-### `Briner.spec`
-- Idéntico a BrinerBackground excepto `console=True`.
+### `NAPSorter.spec`
+- Idéntico a NAPBackground excepto `console=True`.
 
-### `BrinerMonitor.spec`
+### `NAPMonitor.spec`
 - `console=False`
 - Sin LangChain ni LangGraph (excluidos explícitamente).
 - Solo necesita: `sqlite3`, `tkinter`, `pystray`, `PIL` y `runtime.commands`.
@@ -420,15 +420,15 @@ Los tres specs de PyInstaller viven en `briner_agent/`:
 ### Comando de build
 ```powershell
 cd briner_agent
-python -m PyInstaller --clean --noconfirm Briner.spec
-python -m PyInstaller --clean --noconfirm BrinerBackground.spec
-python -m PyInstaller --clean --noconfirm BrinerMonitor.spec
+python -m PyInstaller --clean --noconfirm NAPSorter.spec
+python -m PyInstaller --clean --noconfirm NAPBackground.spec
+python -m PyInstaller --clean --noconfirm NAPMonitor.spec
 ```
 O simplemente: `build_all.bat`
 
 ### Crear zip de release
 ```powershell
-Compress-Archive -Path "briner_agent\dist\Briner","briner_agent\dist\BrinerBackground","briner_agent\dist\BrinerMonitor","Install.bat","README.md","MANUAL_USO.md" -DestinationPath "briner_v1.2.0.zip" -Force
+Compress-Archive -Path "briner_agent\dist\NAP Files-Sorter","briner_agent\dist\NAPBackground","briner_agent\dist\NAPMonitor","Install.bat","README.md","MANUAL_USO.md" -DestinationPath "briner_v1.7.0.zip" -Force
 ```
 El zip coloca las 3 carpetas y `Install.bat` al mismo nivel raíz.
 
@@ -439,7 +439,7 @@ El zip coloca las 3 carpetas y `Install.bat` al mismo nivel raíz.
 ```powershell
 cd briner_agent
 python -m pytest tests/ -q
-# Resultado esperado v1.2.0: 50 passed
+# Resultado esperado v1.7.0: 50 passed
 ```
 
 ### Cobertura por archivo de test
@@ -455,15 +455,15 @@ python -m pytest tests/ -q
 
 ## Flujo de instalación (Install.bat)
 
-1. Verifica existencia de `Briner\Briner.exe`, `Briner\_internal\python314.dll`, `Briner\_internal\_socket.pyd`.
+1. Verifica existencia de `NAP Files-Sorter\NAPSorter.exe`, `NAP Files-Sorter\_internal\python314.dll`, `NAP Files-Sorter\_internal\_socket.pyd`.
 2. Muestra diálogo de selección de carpeta (PowerShell + Windows.Forms en archivo .ps1 temporal).
 3. Pide la API key por consola.
-4. Crea `%APPDATA%\Briner\.env` con `GOOGLE_API_KEY=...`.
-5. Ejecuta `Briner.exe --setup --watch-dir "..."` → crea `user_settings.json` + instala acceso directo en Startup.
-6. Mata cualquier instancia anterior de `BrinerBackground.exe`.
-7. Lanza `BrinerBackground.exe --no-wizard` en segundo plano.
-8. Crea acceso directo "Briner Monitor" en el Escritorio.
-9. Lanza `BrinerMonitor.exe`.
+4. Crea `%APPDATA%\NAP Files-Sorter\.env` con `GOOGLE_API_KEY=...`.
+5. Ejecuta `NAPSorter.exe --setup --watch-dir "..."` → crea `user_settings.json` + instala acceso directo en Startup.
+6. Mata cualquier instancia anterior de `NAPBackground.exe`.
+7. Lanza `NAPBackground.exe --no-wizard` en segundo plano.
+8. Crea acceso directo "NAP Monitor" en el Escritorio.
+9. Lanza `NAPMonitor.exe`.
 
 ---
 
@@ -471,10 +471,10 @@ python -m pytest tests/ -q
 
 | Decisión | Motivo |
 |---|---|
-| 3 ejecutables separados | Briner.exe necesita consola para el setup interactivo; BrinerBackground necesita `console=False` para no flashear ventanas al arrancar con Windows; BrinerMonitor es puro UI sin dependencias de LangChain. |
+| 3 ejecutables separados | NAPSorter.exe necesita consola para el setup interactivo; NAPBackground necesita `console=False` para no flashear ventanas al arrancar con Windows; NAPMonitor es puro UI sin dependencias de LangChain. |
 | LLM inicialización lazy | La bandeja del sistema aparece en < 2 s aunque la API no esté disponible. Un error de API key no impide arrancar. |
 | IPC por archivos | `.force_scan` se conserva para escaneo inmediato y `commands/*.json` permite comandos de usuario final sin sockets ni HTTP. Compatible con frozen exes. |
 | Catch-up mode | Con carpetas de 70k+ archivos, dormir 1 hora entre lotes tomaría semanas. El catch-up procesa de forma continua hasta quedar al día. |
 | 2s entre chunks LLM | La API gratuita de Gemini tiene límite de 15 req/min. Sin pausa, 3 fallos consecutivos abren el circuit breaker y bloquean la clasificación el resto del ciclo. |
 | Decision cache con normalización de dígitos | Fotos de WhatsApp siguen patrones como `IMG_001.jpg`, `IMG_002.jpg`. Normalizar los dígitos a `#` permite reusar decisiones entre miles de fotos similares. |
-| SQLite compartida en APPDATA | Briner.exe, BrinerBackground.exe y BrinerMonitor.exe deben leer/escribir el mismo estado. APPDATA es el punto común entre los 3 procesos independientemente de dónde estén instalados. |
+| SQLite compartida en APPDATA | NAPSorter.exe, NAPBackground.exe y NAPMonitor.exe deben leer/escribir el mismo estado. APPDATA es el punto común entre los 3 procesos independientemente de dónde estén instalados. |

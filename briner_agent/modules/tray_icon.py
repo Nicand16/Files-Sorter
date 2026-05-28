@@ -18,7 +18,7 @@ def _make_icon(color: tuple):
     return img
 
 
-class BrinerTrayIcon:
+class NAPTrayIcon:
     _GREEN = (34, 197, 94)
     _BLUE = (59, 130, 246)
     _RED = (239, 68, 68)
@@ -92,7 +92,7 @@ class BrinerTrayIcon:
             self._color = self._RED
         self._refresh_icon()
         if notify:
-            self._notify("Briner - Error", message)
+            self._notify("NAP Files-Sorter - Error", message)
 
     def clear_error(self):
         with self._lock:
@@ -102,8 +102,8 @@ class BrinerTrayIcon:
 
     def _title(self, status: str, error_message: str = "") -> str:
         if error_message:
-            return f"Briner - ERROR: {error_message[:96]}"
-        return f"Briner - {status}"
+            return f"NAP - ERROR: {error_message[:96]}"
+        return f"NAP - {status}"
 
     def _refresh_icon(self):
         if self._icon:
@@ -153,7 +153,7 @@ class BrinerTrayIcon:
             recent = list(self._recent_file_events)
 
         items = [
-            pystray.MenuItem(f"Briner - {status}", None, enabled=False),
+            pystray.MenuItem(f"NAP Files-Sorter - {status}", None, enabled=False),
             pystray.Menu.SEPARATOR,
         ]
         if error_message:
@@ -202,15 +202,15 @@ class BrinerTrayIcon:
                 pystray.MenuItem("Deshacer ultimo movimiento", self._undo_last),
                 pystray.MenuItem("Cambiar API key...", self._change_api_key),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Detener Briner", self._quit),
+                pystray.MenuItem("Detener NAP Files-Sorter", self._quit),
             ]
         )
         return pystray.Menu(*items)
 
     def _open_monitor(self, icon, item):
         import subprocess
-        # When frozen: BrinerMonitor.exe lives next to BrinerBackground.exe in dist/
-        monitor_exe = Path(sys.executable).parent.parent / "BrinerMonitor" / "BrinerMonitor.exe"
+        # When frozen: NAPMonitor.exe lives next to NAPBackground.exe in dist/
+        monitor_exe = Path(sys.executable).parent.parent / "NAPMonitor" / "NAPMonitor.exe"
         if monitor_exe.exists():
             subprocess.Popen([str(monitor_exe)])
             return
@@ -221,7 +221,7 @@ class BrinerTrayIcon:
 
     def _open_logs(self, icon, item):
         log_dir = self.appdata_dir / "logs"
-        log_file = log_dir / "briner.log"
+        log_file = log_dir / "nap.log"
         target = log_file if log_file.exists() else log_dir
         if target.exists():
             os.startfile(str(target))
@@ -240,7 +240,7 @@ class BrinerTrayIcon:
             target.mkdir(parents=True, exist_ok=True)
             os.startfile(str(target))
         except Exception as exc:
-            self._notify("Briner", f"No se pudo abrir revision: {exc}")
+            self._notify("NAP Files-Sorter", f"No se pudo abrir revision: {exc}")
 
     def _force_scan(self, icon, item):
         enqueue_command(self.appdata_dir, "force_scan")
@@ -252,7 +252,7 @@ class BrinerTrayIcon:
         ps_script = (
             "Add-Type -AssemblyName System.Windows.Forms; "
             "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
-            "$dialog.Description = 'Selecciona la carpeta que Briner debe organizar'; "
+            "$dialog.Description = 'Selecciona la carpeta que NAP Files-Sorter debe organizar'; "
             f"$dialog.SelectedPath = '{selected_path}'; "
             "if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { "
             "Write-Output $dialog.SelectedPath }"
@@ -264,29 +264,29 @@ class BrinerTrayIcon:
             )
             folder = result.stdout.strip()
         except Exception as exc:
-            self._notify("Briner", f"No se pudo abrir selector de carpeta: {exc}")
+            self._notify("NAP Files-Sorter", f"No se pudo abrir selector de carpeta: {exc}")
             return
         if not folder:
             return
         enqueue_command(self.appdata_dir, "change_workspace", {"workspace_dir": folder})
-        self._notify("Briner", "Cambio de carpeta solicitado.")
+        self._notify("NAP Files-Sorter", "Cambio de carpeta solicitado.")
 
     def _toggle_pause(self, icon, item):
         self._paused = not self._paused
         enqueue_command(self.appdata_dir, "pause" if self._paused else "resume")
-        self._notify("Briner", "Organizacion pausada." if self._paused else "Organizacion reanudada.")
+        self._notify("NAP Files-Sorter", "Organizacion pausada." if self._paused else "Organizacion reanudada.")
 
     def _undo_last(self, icon, item):
         enqueue_command(self.appdata_dir, "undo_last")
-        self._notify("Briner", "Deshacer solicitado.")
+        self._notify("NAP Files-Sorter", "Deshacer solicitado.")
 
     def _change_api_key(self, icon, item):
         import subprocess
         ps_script = (
             "Add-Type -AssemblyName Microsoft.VisualBasic; "
             "$key = [Microsoft.VisualBasic.Interaction]::InputBox("
-            "'Pega tu nueva API key de Google Gemini:', "
-            "'Briner - Cambiar API key', ''); "
+            "'Pega tu nueva API key de Groq:', "
+            "'NAP Files-Sorter - Cambiar API key', ''); "
             "Write-Output $key"
         )
         try:
@@ -302,19 +302,30 @@ class BrinerTrayIcon:
             return
         env_path = self.appdata_dir / ".env"
         try:
-            env_path.write_text(f"GOOGLE_API_KEY={new_key}\n", encoding="utf-8")
+            lines = []
+            updated = False
+            if env_path.exists():
+                for line in env_path.read_text(encoding="utf-8-sig").splitlines():
+                    if line.strip().startswith("GROQ_API_KEY="):
+                        lines.append(f"GROQ_API_KEY={new_key}")
+                        updated = True
+                    else:
+                        lines.append(line)
+            if not updated:
+                lines.append(f"GROQ_API_KEY={new_key}")
+            env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
             enqueue_command(self.appdata_dir, "reload_api_key")
         except Exception as exc:
             logger.error("No se pudo guardar la API key: %s", exc)
             return
-        os.environ["GOOGLE_API_KEY"] = new_key
+        os.environ["GROQ_API_KEY"] = new_key
         if self._on_api_key_changed:
             try:
                 self._on_api_key_changed()
             except Exception as exc:
                 logger.warning("Error al reiniciar LLM tras cambio de key: %s", exc)
         self.clear_error()
-        logger.info("API key actualizada correctamente.")
+        logger.info("API key de Groq actualizada correctamente.")
 
     def _quit(self, icon, item):
         self.stop_event.set()
@@ -333,7 +344,7 @@ class BrinerTrayIcon:
             error_message = self.last_error_message
         img = _make_icon(color)
         self._icon = pystray.Icon(
-            "Briner",
+            "NAP Files-Sorter",
             img,
             self._title(status, error_message),
             menu=self._build_menu(),
@@ -341,7 +352,7 @@ class BrinerTrayIcon:
         self._icon.run(setup=self._flush_pending_notifications)
 
     def start(self):
-        t = threading.Thread(target=self._run, daemon=True, name="BrinerTray")
+        t = threading.Thread(target=self._run, daemon=True, name="NAPTray")
         t.start()
 
     def _run(self):
@@ -353,7 +364,7 @@ class BrinerTrayIcon:
                 error_message = self.last_error_message
             img = _make_icon(color)
             self._icon = pystray.Icon(
-                "Briner",
+                "NAP Files-Sorter",
                 img,
                 self._title(status, error_message),
                 menu=self._build_menu(),

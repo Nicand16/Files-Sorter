@@ -40,7 +40,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='BrinerMonitor',
+    name='NAPMonitor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -59,5 +59,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='BrinerMonitor',
+    name='NAPMonitor',
 )

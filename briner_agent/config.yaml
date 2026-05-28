@@ -1,6 +1,6 @@
 app:
-  name: "Briner"
-  version: "1.5.0"
+  name: "NAP Files-Sorter"
+  version: "1.7.0"
   description: "AI Autonomous Agent for File Management"
 
 monitoring:
@@ -23,7 +23,7 @@ monitoring:
     "Varios": "7. Varios"
 
 database:
-  sqlite_path: "./db/briner.db"
+  sqlite_path: "./db/nap.db"
 
 llm:
   groq_model: "llama-3.3-70b-versatile"
